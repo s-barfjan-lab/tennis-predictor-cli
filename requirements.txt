@@ -1,2 +1,5 @@
 typer[all]
 rich
+pandas
+numpy
+pyarrow

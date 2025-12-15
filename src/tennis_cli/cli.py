@@ -1,6 +1,11 @@
 import typer
 from rich.console import Console
 from . import __app_name__, __version__
+from pathlib import Path
+from .config import get_paths, get_settings
+from .pipelines.update_data import update_sackmann_data
+from .pipelines.build_datasets import build_tour_dataset, explore_dataset
+
 
 # Create a Typer app
 app = typer.Typer(help="Tennis predictor CLI (Phase 0 skeleton)")
@@ -35,17 +40,6 @@ def hello(name: str = "world"):
     console.print(f"🎾 Hello, [bold]{name}[/]! Welcome to the tennis CLI (Phase 0).")
 
 
-@app.command("explore-data")
-def explore_data():
-    """
-    Placeholder for data exploration.
-
-    For now it just prints a message.
-    Later it will call your real data exploration code (pandas, etc.).
-    """
-    console.print("[yellow]Data exploration is not implemented yet.[/]")
-    console.print("In Phase 1, we'll connect this command to your real code.")
-
 
 @app.command("train-baseline")
 def train_baseline():
@@ -63,4 +57,51 @@ def run():
     app()
 
 if __name__ == "__main__":
-    run()       
+    run()   
+
+
+@app.command("update-data")
+def update_data():
+    """
+    Download/update local datasets (local-first).
+    Currently: Jeff Sackmann ATP/WTA repos.
+    """
+    paths = get_paths()
+    update_sackmann_data(paths.sackmann_dir)  
+
+
+@app.command("build-datasets")
+def build_datasets(
+    tour: str = typer.Option(..., "--tour", help="Tour: atp or wta"),
+):
+    """
+    Build clean processed datasets (ATP/WTA separately).
+    Outputs parquet files to data/processed/.
+    """
+    paths = get_paths()
+    settings = get_settings()
+
+    artifacts = build_tour_dataset(
+        tour=tour,
+        sackmann_root=paths.sackmann_dir,
+        processed_dir=paths.processed_dir,
+        year_min=settings.year_min,
+        year_max=settings.year_max,
+        drop_walkovers=settings.drop_walkovers,
+        drop_retirements=settings.drop_retirements,
+    )
+
+    console.print(f"[bold green]Saved:[/] {artifacts.matches_parquet}") 
+
+
+@app.command("explore-data")
+def explore_data_cmd(
+    tour: str = typer.Option(..., "--tour", help="Tour: atp or wta"),
+):
+    """
+    Print dataset sanity checks (counts, surfaces, missingness).
+    """
+    paths = get_paths()
+    settings = get_settings()
+    parquet_path = paths.processed_dir / f"{tour}_matches_{settings.year_min}_{settings.year_max}.parquet"
+    explore_dataset(parquet_path) 
