@@ -2,7 +2,7 @@
 
 A **modular, CLI-first Python system** for predicting **tennis match outcomes** (pre-match & live), **set/game probabilities**, and **long-term player trajectories** by combining **structured performance statistics** with **lightweight LLM-extracted context** (injury, fatigue, coaching changes).
 
-Built with a strong focus on **probability calibration, reproducibility, and interpretability**, grounded in peer-reviewed sports analytics literature.
+Built with a strong focus on **probability calibration, reproducibility, and interpretability**, based on peer-reviewed sports analytics literature.
 
 ---
 
