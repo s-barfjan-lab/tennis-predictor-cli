@@ -6,7 +6,7 @@ from pathlib import Path
 from .config import get_paths, get_settings
 from .pipelines.update_data import update_sackmann_data
 from .pipelines.build_datasets import build_tour_dataset, explore_dataset
-
+from .pipelines.build_features import (build_long_view_artifact, build_baseline_feature_artifact,)
 
 # Create a Typer app
 app = typer.Typer(help="Tennis predictor CLI (Phase 0 skeleton)")
@@ -106,3 +106,24 @@ def explore_data_cmd(
     settings = get_settings()
     parquet_path = paths.processed_dir / f"{tour}_matches_{settings.year_min}_{settings.year_max}.parquet"
     explore_dataset(parquet_path) 
+
+
+
+@app.command("build-features")
+def build_features_cmd(
+    tour: str = typer.Option(..., "--tour", help="Tour: atp or wta"),
+    track: str = typer.Option("player", "--track", help="Feature track: player or baseline"),
+):
+    """
+    Build feature artifacts.
+    """
+    track = track.lower().strip()
+
+    if track == "player":
+        output_path = build_long_view_artifact(tour)
+    elif track == "baseline":
+        output_path = build_baseline_feature_artifact(tour)
+    else:
+        raise ValueError("track must be either 'player' or 'baseline'")
+
+    console.print(f"[bold green]Saved:[/] {output_path}")

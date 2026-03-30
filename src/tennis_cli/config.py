@@ -13,6 +13,8 @@ class Paths:
     data_dir: Path
     raw_dir: Path
     processed_dir: Path
+    features_dir: Path
+    models_dir: Path
     sackmann_dir: Path
 # Each one is a Path, not a string
 # frozen=True -> once created, these paths cannot be changed by mistake (prevents bugs later)
@@ -28,6 +30,8 @@ def get_paths() -> Paths:
     data_dir = project_root / "data"
     raw_dir = data_dir / "raw"
     processed_dir = data_dir / "processed"
+    features_dir = data_dir / "features"
+    models_dir = data_dir / "models"
     sackmann_dir = raw_dir / "sackmann"
 
     return Paths(
@@ -35,6 +39,8 @@ def get_paths() -> Paths:
         data_dir=data_dir,
         raw_dir=raw_dir,
         processed_dir=processed_dir,
+        features_dir =features_dir,
+        models_dir =models_dir,
         sackmann_dir=sackmann_dir,
     )
 
