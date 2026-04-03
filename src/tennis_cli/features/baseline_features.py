@@ -66,6 +66,7 @@ def build_baseline_match_table(long_df: pd.DataFrame) -> pd.DataFrame:
         "player_age",
         "player_rank",
         "player_rank_points",
+        "player_elo_pre",
 
         "label_win",
 
@@ -114,6 +115,11 @@ def build_baseline_match_table(long_df: pd.DataFrame) -> pd.DataFrame:
     # Rank points: higher is better, so A - B is already intuitive
     wide["delta_rank_points"] = wide["player_rank_points_a"] - wide["player_rank_points_b"]
 
+    # Elo: higher is better, so A - B is intuitive
+    wide["elo_a"] = wide["player_elo_pre_a"]
+    wide["elo_b"] = wide["player_elo_pre_b"]
+    wide["delta_elo"] = wide["elo_a"] - wide["elo_b"]
+
     # Physical / demographic differences
     wide["delta_age"] = wide["player_age_a"] - wide["player_age_b"]
     wide["delta_height"] = wide["player_ht_a"] - wide["player_ht_b"]
@@ -153,6 +159,9 @@ def build_baseline_match_table(long_df: pd.DataFrame) -> pd.DataFrame:
 
         "delta_rank_adv",
         "delta_rank_points",
+        "elo_a",
+        "elo_b",
+        "delta_elo",
         "delta_age",
         "delta_height",
         "delta_matches_played",

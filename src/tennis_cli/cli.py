@@ -8,6 +8,9 @@ from .pipelines.update_data import update_sackmann_data
 from .pipelines.build_datasets import build_tour_dataset, explore_dataset
 from .pipelines.build_features import (build_long_view_artifact, build_baseline_feature_artifact,)
 
+from .pipelines.train_model import train_logistic_for_tour
+from .pipelines.predict_match import predict_match_for_tour
+
 # Create a Typer app
 app = typer.Typer(help="Tennis predictor CLI (Phase 0 skeleton)")
 
@@ -37,26 +40,81 @@ def hello(name: str = "world"):
     console.print(f"🎾 Hello, [bold]{name}[/]! Welcome to the tennis CLI (Phase 0).")
 
 
-# This function should be completed in phase 2 -> now just documents future intent
-@app.command("train-baseline")
-def train_baseline():
+@app.command("train")
+def train_cmd(
+    tour: str = typer.Option(..., "--tour", help="Tour: atp or wta"),
+    model: str = typer.Option("logit", "--model", help="Model type: currently only logit"),
+):
     """
-    Placeholder for training a baseline model.
+    Train a Phase 3 baseline model and save artifacts to data/models/.
     """
-    console.print("[magenta]Baseline training is not implemented yet.[/]")
-    console.print("In a later phase, this will train a logistic regression model.") 
+    tour = tour.lower().strip()
+    model = model.lower().strip()
+
+    if tour not in {"atp", "wta"}:
+        raise typer.BadParameter("tour must be 'atp' or 'wta'")
+
+    if model != "logit":
+        raise typer.BadParameter("Only 'logit' is currently implemented")
+
+    paths = get_paths()
+    result = train_logistic_for_tour(paths.project_root, tour)
+
+    console.print(f"[bold green]Training completed for[/] {tour.upper()}")
+    console.print(f"[bold green]Model:[/] {result['model_path']}")
+    console.print(f"[bold green]Metrics JSON:[/] {result['metrics_path']}")
+    console.print(f"[bold green]Metrics CSV:[/] {result['metrics_table_path']}")
+    console.print(f"[bold green]Coefficients:[/] {result['coef_path']}")
+    console.print(f"[bold green]Metadata:[/] {result['metadata_path']}")
+
+    console.print("\n[bold cyan]Validation metrics:[/]")
+    console.print(result["validation_metrics"])
+
+    console.print("\n[bold cyan]Test metrics:[/]")
+    console.print(result["test_metrics"])
 
 
-# This function allows multiple ways to launch the app (python -m tennis_cli)
-def run():
-    """
-    Entry point used by `python -m tennis_cli`.
-    """
-    app()
 
-# this allows the file to be run directly
-if __name__ == "__main__":
-    run()   
+@app.command("predict-match")
+def predict_match_cmd(
+    tour: str = typer.Option(..., "--tour", help="Tour: atp or wta"),
+    player_a: str = typer.Option(..., "--player-a", help="First player name"),
+    player_b: str = typer.Option(..., "--player-b", help="Second player name"),
+    date: str = typer.Option(..., "--date", help="Match date in YYYY-MM-DD format"),
+):
+    """
+    Predict match winner probability for two players on a given date.
+    """
+    tour = tour.lower().strip()
+
+    if tour not in {"atp", "wta"}:
+        raise typer.BadParameter("tour must be 'atp' or 'wta'")
+
+    paths = get_paths()
+    result = predict_match_for_tour(project_root=paths.project_root, tour=tour,
+        player_a=player_a, player_b=player_b, match_date=date, )
+
+    console.print(f"[bold green]Prediction completed for[/] {tour.upper()}")
+    console.print(f"[bold]Date:[/] {result['match_date']}")
+    console.print(f"[bold]Requested matchup:[/] {result['requested_player_a']} vs {result['requested_player_b']}")
+    console.print(f"[bold]Canonical matchup:[/] {result['canonical_player_a']} vs {result['canonical_player_b']}")
+
+    console.print("")
+    console.print(f"[bold cyan]{result['requested_player_a']} win probability:[/] "
+        f"{result['prob_requested_player_a_win']:.4f}")
+    console.print(f"[bold cyan]{result['requested_player_b']} win probability:[/] "
+        f"{result['prob_requested_player_b_win']:.4f}")
+
+    snapshot = result["feature_snapshot"]
+    console.print("")
+    console.print("[bold magenta]Key feature snapshot used:[/]")
+    console.print(f"delta_elo: {snapshot.get('delta_elo')}")
+    console.print(f"delta_rank_adv: {snapshot.get('delta_rank_adv')}")
+    console.print(f"delta_win_rate_last10: {snapshot.get('delta_win_rate_last10')}")
+    console.print(f"delta_serve_win_pct_last10: {snapshot.get('delta_serve_win_pct_last10')}")
+
+
+
 
 
 @app.command("update-data")
@@ -127,3 +185,16 @@ def build_features_cmd(
         raise ValueError("track must be either 'player' or 'baseline'")
 
     console.print(f"[bold green]Saved:[/] {output_path}")
+
+
+
+# This function allows multiple ways to launch the app (python -m tennis_cli)
+def run():
+    """
+    Entry point used by `python -m tennis_cli`.
+    """
+    app()
+
+# this allows the file to be run directly
+if __name__ == "__main__":
+    run()   

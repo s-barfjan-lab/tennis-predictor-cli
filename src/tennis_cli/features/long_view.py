@@ -83,6 +83,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "player_rank": _safe_col(df, "winner_rank"),
             "player_rank_points": _safe_col(df, "winner_rank_points"),
             "player_seed": _safe_col(df, "winner_seed"),
+            "player_elo_pre": _safe_col(df, "winner_elo_pre"),
+            "player_elo_post": _safe_col(df, "winner_elo_post"),
 
             "opponent_id": _safe_col(df, "loser_id"),
             "opponent_name": _safe_col(df, "loser_name"),
@@ -92,6 +94,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "opponent_rank": _safe_col(df, "loser_rank"),
             "opponent_rank_points": _safe_col(df, "loser_rank_points"),
             "opponent_seed": _safe_col(df, "loser_seed"),
+            "opponent_elo_pre": _safe_col(df, "loser_elo_pre"),
+            "opponent_elo_post": _safe_col(df, "loser_elo_post"),
 
             "is_winner": 1,
             "label_win": 1,
@@ -130,6 +134,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "player_rank": _safe_col(df, "loser_rank"),
             "player_rank_points": _safe_col(df, "loser_rank_points"),
             "player_seed": _safe_col(df, "loser_seed"),
+            "player_elo_pre": _safe_col(df, "loser_elo_pre"),
+            "player_elo_post": _safe_col(df, "loser_elo_post"),
 
             "opponent_id": _safe_col(df, "winner_id"),
             "opponent_name": _safe_col(df, "winner_name"),
@@ -139,6 +145,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "opponent_rank": _safe_col(df, "winner_rank"),
             "opponent_rank_points": _safe_col(df, "winner_rank_points"),
             "opponent_seed": _safe_col(df, "winner_seed"),
+            "opponent_elo_pre": _safe_col(df, "winner_elo_pre"),
+            "opponent_elo_post": _safe_col(df, "winner_elo_post"),
 
             "is_winner": 0,
             "label_win": 0,
@@ -163,6 +171,10 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
         "player_age",
         "player_rank",
         "player_rank_points",
+        "player_elo_pre",
+        "player_elo_post",
+        "opponent_elo_pre",
+        "opponent_elo_post",
         "opponent_ht",
         "opponent_age",
         "opponent_rank",
@@ -196,6 +208,9 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
     long_df["service_points_won"] = long_df["first_won"] + long_df["second_won"]
     long_df["service_points_won_pct"] = long_df["service_points_won"] / long_df["serve_points"]
 
+    # Elo difference from player perspective
+    long_df["elo_diff_pre"] = long_df["player_elo_pre"] - long_df["opponent_elo_pre"]
+
     # Clean infinities from divisions
     long_df = long_df.replace([float("inf"), float("-inf")], pd.NA)
 
@@ -215,6 +230,9 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
         "label_win",
         "player_rank",
         "opponent_rank",
+        "player_elo_pre",
+        "opponent_elo_pre",
+        "elo_diff_pre",
         "aces",
         "double_faults",
         "serve_points",
