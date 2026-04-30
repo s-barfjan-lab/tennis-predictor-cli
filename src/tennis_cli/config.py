@@ -16,6 +16,7 @@ class Paths:
     features_dir: Path
     models_dir: Path
     sackmann_dir: Path
+    tml_dir: Path
 # Each one is a Path, not a string
 # frozen=True -> once created, these paths cannot be changed by mistake (prevents bugs later)
 
@@ -33,6 +34,7 @@ def get_paths() -> Paths:
     features_dir = data_dir / "features"
     models_dir = data_dir / "models"
     sackmann_dir = raw_dir / "sackmann"
+    tml_dir = raw_dir / "tml"
 
     return Paths(
         project_root=project_root,
@@ -42,6 +44,7 @@ def get_paths() -> Paths:
         features_dir =features_dir,
         models_dir =models_dir,
         sackmann_dir=sackmann_dir,
+        tml_dir=tml_dir,
     )
 
 

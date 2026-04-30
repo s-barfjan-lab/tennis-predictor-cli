@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from tennis_cli.models.dataset import TARGET_COLUMN
+from sklearn.model_selection import TimeSeriesSplit
 
 
 @dataclass
@@ -93,3 +94,73 @@ def summarize_all_splits(train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: 
         summarize_split(test_df, "test"),
     ]
     return pd.DataFrame(rows)
+
+def summarize_surface_balance(df: pd.DataFrame, config: TimeSplitConfig | None = None, ) -> pd.DataFrame:
+    """
+    Summarize class balance by split and surface.
+
+    Output columns:
+    - split
+    - surface
+    - rows
+    - positive_labels
+    - negative_labels
+    - positive_rate
+    - date_min
+    - date_max
+    """
+    if config is None:
+        config = TimeSplitConfig()
+
+    _validate_split_input(df, config.date_col)
+
+    out = df.copy()
+    out[config.date_col] = pd.to_datetime(out[config.date_col], errors="raise")
+    out = out.sort_values([config.date_col, "match_id"]).reset_index(drop=True)
+
+    train_end = pd.Timestamp(config.train_end)
+    val_end = pd.Timestamp(config.val_end)
+
+    def _label_split(ts: pd.Timestamp) -> str:
+        if ts <= train_end:
+            return "train"
+        if ts <= val_end:
+            return "validation"
+        return "test"
+
+    out["split"] = out[config.date_col].apply(_label_split)
+    out["surface_norm"] = out["surface"].astype(str).str.upper()
+
+    rows = []
+    for (split_name, surface_name), grp in out.groupby(["split", "surface_norm"], dropna=False):
+        rows.append(
+            {
+                "split": split_name,
+                "surface": surface_name,
+                "rows": int(len(grp)),
+                "positive_labels": int(grp[TARGET_COLUMN].sum()),
+                "negative_labels": int((1 - grp[TARGET_COLUMN]).sum()),
+                "positive_rate": float(grp[TARGET_COLUMN].mean()),
+                "date_min": str(grp[config.date_col].min().date()),
+                "date_max": str(grp[config.date_col].max().date()),
+            }
+        )
+
+    summary_df = pd.DataFrame(rows).sort_values(
+        ["split", "surface"],
+        ignore_index=True,
+    )
+    return summary_df
+
+
+def build_inner_time_series_cv(n_splits: int = 3) -> TimeSeriesSplit:
+    """
+    Build the inner cross-validation splitter used for hyperparameter tuning
+    on the training portion only.
+
+    We use TimeSeriesSplit to preserve chronology inside the training split.
+    """
+    if n_splits < 2:
+        raise ValueError("n_splits must be at least 2")
+
+    return TimeSeriesSplit(n_splits=n_splits)

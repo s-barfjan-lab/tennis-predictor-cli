@@ -22,9 +22,17 @@ def _build_match_id(df: pd.DataFrame) -> pd.Series:
     """
     Build a deterministic match identifier from available columns.
 
-    We do this because the processed match tables may not come with a single
-    official unique match_id column.
+    Priority:
+    1. use tourney_id + match_num when available (best option)
+    2. otherwise fall back to the older composite key
     """
+    if "tourney_id" in df.columns and "match_num" in df.columns:
+        tourney_id = _safe_col(df, "tourney_id", "").astype(str)
+        match_num = _safe_col(df, "match_num", "").astype(str)
+
+        match_id = tourney_id + "__" + match_num
+        return match_id
+
     tourney_date = _safe_col(df, "tourney_date", "").astype(str)
     tourney_name = _safe_col(df, "tourney_name", "").astype(str)
     round_col = _safe_col(df, "round", "").astype(str)
@@ -85,6 +93,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "player_seed": _safe_col(df, "winner_seed"),
             "player_elo_pre": _safe_col(df, "winner_elo_pre"),
             "player_elo_post": _safe_col(df, "winner_elo_post"),
+            "player_surface_elo_pre": _safe_col(df, "winner_surface_elo_pre"),
+            "player_surface_elo_post": _safe_col(df, "winner_surface_elo_post"),
 
             "opponent_id": _safe_col(df, "loser_id"),
             "opponent_name": _safe_col(df, "loser_name"),
@@ -96,6 +106,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "opponent_seed": _safe_col(df, "loser_seed"),
             "opponent_elo_pre": _safe_col(df, "loser_elo_pre"),
             "opponent_elo_post": _safe_col(df, "loser_elo_post"),
+            "opponent_surface_elo_pre": _safe_col(df, "loser_surface_elo_pre"),
+            "opponent_surface_elo_post": _safe_col(df, "loser_surface_elo_post"),
 
             "is_winner": 1,
             "label_win": 1,
@@ -109,6 +121,15 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "service_games": _safe_col(df, "w_SvGms"),
             "break_points_saved": _safe_col(df, "w_bpSaved"),
             "break_points_faced": _safe_col(df, "w_bpFaced"),
+
+            # opponent serve data -> player return data
+            "opponent_serve_points": _safe_col(df, "l_svpt"),
+            "opponent_first_in": _safe_col(df, "l_1stIn"),
+            "opponent_first_won": _safe_col(df, "l_1stWon"),
+            "opponent_second_won": _safe_col(df, "l_2ndWon"),
+            "opponent_service_games": _safe_col(df, "l_SvGms"),
+            "opponent_break_points_saved": _safe_col(df, "l_bpSaved"),
+            "opponent_break_points_faced": _safe_col(df, "l_bpFaced"),
         }
     )
 
@@ -136,6 +157,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "player_seed": _safe_col(df, "loser_seed"),
             "player_elo_pre": _safe_col(df, "loser_elo_pre"),
             "player_elo_post": _safe_col(df, "loser_elo_post"),
+            "player_surface_elo_pre": _safe_col(df, "loser_surface_elo_pre"),
+            "player_surface_elo_post": _safe_col(df, "loser_surface_elo_post"),
 
             "opponent_id": _safe_col(df, "winner_id"),
             "opponent_name": _safe_col(df, "winner_name"),
@@ -147,6 +170,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "opponent_seed": _safe_col(df, "winner_seed"),
             "opponent_elo_pre": _safe_col(df, "winner_elo_pre"),
             "opponent_elo_post": _safe_col(df, "winner_elo_post"),
+            "opponent_surface_elo_pre": _safe_col(df, "winner_surface_elo_pre"),
+            "opponent_surface_elo_post": _safe_col(df, "winner_surface_elo_post"),
 
             "is_winner": 0,
             "label_win": 0,
@@ -160,6 +185,15 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "service_games": _safe_col(df, "l_SvGms"),
             "break_points_saved": _safe_col(df, "l_bpSaved"),
             "break_points_faced": _safe_col(df, "l_bpFaced"),
+
+            # opponent serve data -> player return data
+            "opponent_serve_points": _safe_col(df, "w_svpt"),
+            "opponent_first_in": _safe_col(df, "w_1stIn"),
+            "opponent_first_won": _safe_col(df, "w_1stWon"),
+            "opponent_second_won": _safe_col(df, "w_2ndWon"),
+            "opponent_service_games": _safe_col(df, "w_SvGms"),
+            "opponent_break_points_saved": _safe_col(df, "w_bpSaved"),
+            "opponent_break_points_faced": _safe_col(df, "w_bpFaced"),
         }
     )
 
@@ -173,8 +207,12 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
         "player_rank_points",
         "player_elo_pre",
         "player_elo_post",
+        "player_surface_elo_pre",
+        "player_surface_elo_post",
         "opponent_elo_pre",
         "opponent_elo_post",
+        "opponent_surface_elo_pre",
+        "opponent_surface_elo_post",
         "opponent_ht",
         "opponent_age",
         "opponent_rank",
@@ -189,6 +227,13 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
         "service_games",
         "break_points_saved",
         "break_points_faced",
+        "opponent_serve_points",
+        "opponent_first_in",
+        "opponent_first_won",
+        "opponent_second_won",
+        "opponent_service_games",
+        "opponent_break_points_saved",
+        "opponent_break_points_faced",
     ]
 
     for col in numeric_cols:
@@ -208,8 +253,17 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
     long_df["service_points_won"] = long_df["first_won"] + long_df["second_won"]
     long_df["service_points_won_pct"] = long_df["service_points_won"] / long_df["serve_points"]
 
-    # Elo difference from player perspective
+    # Return-side stats
+    long_df["opponent_service_points_won"] = (long_df["opponent_first_won"] + long_df["opponent_second_won"])
+    long_df["return_points_won"] = (long_df["opponent_serve_points"] - long_df["opponent_service_points_won"])
+    long_df["return_points_won_pct"] = (long_df["return_points_won"] / long_df["opponent_serve_points"])
+
+    long_df["break_points_converted"] = (long_df["opponent_break_points_faced"] - long_df["opponent_break_points_saved"])
+    long_df["bp_conversion_pct"] = (long_df["break_points_converted"] / long_df["opponent_break_points_faced"])
+
+    # Elo differences from player perspective
     long_df["elo_diff_pre"] = long_df["player_elo_pre"] - long_df["opponent_elo_pre"]
+    long_df["surface_elo_diff_pre"] = (long_df["player_surface_elo_pre"] - long_df["opponent_surface_elo_pre"])
 
     # Clean infinities from divisions
     long_df = long_df.replace([float("inf"), float("-inf")], pd.NA)
@@ -233,6 +287,9 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
         "player_elo_pre",
         "opponent_elo_pre",
         "elo_diff_pre",
+        "player_surface_elo_pre",
+        "opponent_surface_elo_pre",
+        "surface_elo_diff_pre",
         "aces",
         "double_faults",
         "serve_points",
@@ -241,6 +298,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
         "second_serve_won_pct",
         "service_points_won_pct",
         "bp_saved_pct",
+        "return_points_won_pct",
+        "bp_conversion_pct",
     ]
 
     existing_order = [c for c in preferred_order if c in long_df.columns]
