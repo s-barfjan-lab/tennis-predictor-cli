@@ -3,3 +3,6 @@ rich
 pandas
 numpy
 pyarrow
+scikit-learn
+xgboost
+pytest

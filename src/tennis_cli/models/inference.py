@@ -13,6 +13,7 @@ from tennis_cli.models.xgboost_model import (apply_calibration, predict_proba_fr
 
 
 DEFAULT_ELO = 1500.0
+PEAK_TENNIS_AGE = 30.0
 VALID_MODEL_SURFACES = {"HARD", "CLAY", "GRASS"}
 
 ROUND_MAP = {
@@ -114,6 +115,47 @@ def _round_to_ordinal(round_name: str | None):
     return ROUND_MAP.get(value, pd.NA)
 
 
+def _is_round_robin(round_name: str | None):
+    if round_name is None:
+        return pd.NA
+    return int(str(round_name).strip().upper() == "RR")
+
+
+def _normalize_round_name(round_name: str | None) -> str:
+    if round_name is None:
+        return "UNK"
+    value = str(round_name).strip().upper()
+    return value if value else "UNK"
+
+
+def _normalize_tourney_level(tourney_level: str | None) -> str:
+    if tourney_level is None:
+        return "U"
+    value = str(tourney_level).strip().upper()
+    return value if value else "U"
+
+
+def _age_peak_closeness(age):
+    age_num = pd.to_numeric(pd.Series([age]), errors="coerce").iloc[0]
+    if pd.isna(age_num):
+        return pd.NA
+    return -abs(float(age_num) - PEAK_TENNIS_AGE)
+
+
+def _age_peak_distance_squared(age):
+    age_num = pd.to_numeric(pd.Series([age]), errors="coerce").iloc[0]
+    if pd.isna(age_num):
+        return pd.NA
+    return (float(age_num) - PEAK_TENNIS_AGE) ** 2
+
+
+def _normalize_hand(hand) -> str:
+    if pd.isna(hand):
+        return "U"
+    value = str(hand).strip().upper()
+    return value if value else "U"
+
+
 def _load_long_view(project_root: Path, tour: str, source: str = "sackmann") -> pd.DataFrame:
     suffix = "" if source == "sackmann" else f"_{source}"
     path = project_root / "data" / "features" / f"{tour}_long{suffix}_2015_2025.parquet"
@@ -192,12 +234,12 @@ def _get_latest_surface_elo_before_date(
     return current_surface_elo
 
 
-def _compute_h2h_delta_before_date(
+def _compute_h2h_summary_before_date(
     long_df: pd.DataFrame,
     player_a_id: object,
     player_b_id: object,
     as_of_date: pd.Timestamp,
-) -> float:
+) -> dict:
     hist_a = long_df[
         (long_df["player_id"] == player_a_id) &
         (long_df["opponent_id"] == player_b_id) &
@@ -210,14 +252,108 @@ def _compute_h2h_delta_before_date(
         (long_df["tourney_date"] < as_of_date)
     ].copy()
 
-    if hist_a.empty and hist_b.empty:
+    wins_a = int(hist_a["label_win"].sum()) if not hist_a.empty else 0
+    wins_b = int(hist_b["label_win"].sum()) if not hist_b.empty else 0
+    total = wins_a + wins_b
+
+    if total == 0:
         ratio_a = 0.5
         ratio_b = 0.5
     else:
-        ratio_a = float(hist_a["label_win"].mean()) if not hist_a.empty else 0.5
-        ratio_b = float(hist_b["label_win"].mean()) if not hist_b.empty else 0.5
+        ratio_a = wins_a / total
+        ratio_b = wins_b / total
 
-    return ratio_a - ratio_b
+    return {
+        "delta_h2h": ratio_a - ratio_b,
+        "delta_h2h_wins": wins_a - wins_b,
+        "delta_h2h_losses": wins_b - wins_a,
+        "h2h_matches_total": total,
+        "first_meeting": int(total == 0),
+    }
+
+
+def _compute_common_opponent_summary_before_date(
+    long_df: pd.DataFrame,
+    player_a_id: object,
+    player_b_id: object,
+    as_of_date: pd.Timestamp,
+) -> dict:
+    hist = long_df[long_df["tourney_date"] < as_of_date].copy()
+    if hist.empty or "opponent_id" not in hist.columns:
+        return {
+            "common_opp_count": 0.0,
+            "delta_common_opp_win_pct": 0.0,
+            "delta_common_opp_matches": 0.0,
+        }
+
+    hist_a = hist[hist["player_id"] == player_a_id].copy()
+    hist_b = hist[hist["player_id"] == player_b_id].copy()
+
+    if hist_a.empty or hist_b.empty:
+        return {
+            "common_opp_count": 0.0,
+            "delta_common_opp_win_pct": 0.0,
+            "delta_common_opp_matches": 0.0,
+        }
+
+    opp_a = set(hist_a["opponent_id"].dropna().astype(str))
+    opp_b = set(hist_b["opponent_id"].dropna().astype(str))
+    common_opponents = opp_a.intersection(opp_b)
+
+    if not common_opponents:
+        return {
+            "common_opp_count": 0.0,
+            "delta_common_opp_win_pct": 0.0,
+            "delta_common_opp_matches": 0.0,
+        }
+
+    common_a = hist_a[hist_a["opponent_id"].astype(str).isin(common_opponents)].copy()
+    common_b = hist_b[hist_b["opponent_id"].astype(str).isin(common_opponents)].copy()
+    win_pct_a = pd.to_numeric(common_a["label_win"], errors="coerce").mean()
+    win_pct_b = pd.to_numeric(common_b["label_win"], errors="coerce").mean()
+
+    return {
+        "common_opp_count": float(len(common_opponents)),
+        "delta_common_opp_win_pct": float(win_pct_a - win_pct_b),
+        "delta_common_opp_matches": float(len(common_a) - len(common_b)),
+    }
+
+
+def _compute_hand_win_pct_before_date(
+    long_df: pd.DataFrame,
+    player_id: object,
+    opponent_hand,
+    as_of_date: pd.Timestamp,
+    window: int = 10,
+):
+    opponent_hand_norm = _normalize_hand(opponent_hand)
+    hist = long_df[
+        (long_df["player_id"] == player_id) &
+        (long_df["tourney_date"] < as_of_date)
+    ].copy()
+
+    if hist.empty or "opponent_hand" not in hist.columns:
+        return pd.NA
+
+    hist["_opponent_hand_group"] = hist["opponent_hand"].apply(_normalize_hand)
+    hist = hist[hist["_opponent_hand_group"] == opponent_hand_norm].copy()
+    if hist.empty:
+        return pd.NA
+
+    hist = hist.sort_values(["tourney_date", "match_id"]).tail(window)
+    return float(hist["label_win"].mean())
+
+
+def _current_win_streak_from_history(hist: pd.DataFrame) -> int:
+    streak = 0
+    if hist.empty:
+        return streak
+
+    for value in pd.to_numeric(hist.sort_values(["tourney_date", "match_id"])["label_win"], errors="coerce").iloc[::-1]:
+        if pd.isna(value) or int(value) != 1:
+            break
+        streak += 1
+    return streak
 
 
 def _build_player_state(
@@ -225,6 +361,7 @@ def _build_player_state(
     resolved: ResolvedPlayer,
     as_of_date: pd.Timestamp,
     match_surface: str | None,
+    round_name: str | None,
 ) -> dict:
     hist = long_df[
         (long_df["player_id"] == resolved.player_id) &
@@ -240,11 +377,15 @@ def _build_player_state(
 
     latest = hist.iloc[-1]
     recent10 = hist.tail(10)
+    last_365_start = as_of_date - pd.Timedelta(days=365)
+    recent365 = hist[hist["tourney_date"] >= last_365_start]
     surface_hist = (hist[hist["surface"].astype(str).str.title() == match_surface].copy()
         if match_surface is not None
         else hist.iloc[0:0].copy())
     recent10_surface = surface_hist.tail(10)
+    last_7_start = as_of_date - pd.Timedelta(days=7)
     last_30_start = as_of_date - pd.Timedelta(days=30)
+    recent7 = hist[hist["tourney_date"] >= last_7_start]
     recent30 = hist[hist["tourney_date"] >= last_30_start]
     recent30_surface = surface_hist[surface_hist["tourney_date"] >= last_30_start]
 
@@ -275,6 +416,36 @@ def _build_player_state(
     bp_conversion_last10 = (recent10["bp_conversion_pct"].mean()
         if "bp_conversion_pct" in recent10.columns and len(recent10) > 0
         else latest.get("bp_conversion_last10", pd.NA))
+
+    bp_saved_pct_last10 = (recent10["bp_saved_pct"].mean()
+        if "bp_saved_pct" in recent10.columns and len(recent10) > 0
+        else latest.get("bp_saved_pct_last10", pd.NA))
+
+    ace_pct_last10 = (recent10["aces_per_service_point"].mean()
+        if "aces_per_service_point" in recent10.columns and len(recent10) > 0
+        else latest.get("ace_pct_last10", pd.NA))
+
+    df_pct_last10 = (recent10["df_per_service_point"].mean()
+        if "df_per_service_point" in recent10.columns and len(recent10) > 0
+        else latest.get("df_pct_last10", pd.NA))
+
+    first_serve_in_pct_last10 = (recent10["first_serve_in_pct"].mean()
+        if "first_serve_in_pct" in recent10.columns and len(recent10) > 0
+        else latest.get("first_serve_in_pct_last10", pd.NA))
+
+    if "ace_vs_df" in recent10.columns and len(recent10) > 0:
+        ace_vs_df_last10 = recent10["ace_vs_df"].mean()
+    elif {"aces", "double_faults"}.issubset(recent10.columns) and len(recent10) > 0:
+        ace_vs_df_last10 = (recent10["aces"] / recent10["double_faults"].replace(0, pd.NA)).mean()
+    else:
+        ace_vs_df_last10 = latest.get("ace_vs_df_last10", pd.NA)
+
+    if "second_serve_won_per_service_game" in recent10.columns and len(recent10) > 0:
+        second_serve_won_per_service_game_last10 = recent10["second_serve_won_per_service_game"].mean()
+    elif {"second_won", "service_games"}.issubset(recent10.columns) and len(recent10) > 0:
+        second_serve_won_per_service_game_last10 = (recent10["second_won"] / recent10["service_games"]).mean()
+    else:
+        second_serve_won_per_service_game_last10 = latest.get("second_serve_won_per_service_game_last10", pd.NA)
     
     serve_win_pct_last10_surface = (recent10_surface["service_points_won_pct"].mean()
         if "service_points_won_pct" in recent10_surface.columns and len(recent10_surface) > 0
@@ -287,6 +458,14 @@ def _build_player_state(
     bp_conversion_last10_surface = (recent10_surface["bp_conversion_pct"].mean()
         if "bp_conversion_pct" in recent10_surface.columns and len(recent10_surface) > 0
         else latest.get("bp_conversion_last10_surface", pd.NA))
+
+    bp_saved_pct_last10_surface = (recent10_surface["bp_saved_pct"].mean()
+        if "bp_saved_pct" in recent10_surface.columns and len(recent10_surface) > 0
+        else latest.get("bp_saved_pct_last10_surface", pd.NA))
+
+    surface_win_pct_last10 = (recent10_surface["label_win"].mean()
+        if len(recent10_surface) > 0
+        else latest.get("surface_win_pct_last10", pd.NA))
 
     if len(surface_hist) > 0:
         last_surface_match_date = surface_hist.iloc[-1]["tourney_date"]
@@ -302,6 +481,19 @@ def _build_player_state(
         if len(recent10) > 0
         else latest.get("win_rate_last10", pd.NA))
 
+    win_pct_last_365_days = (recent365["label_win"].mean()
+        if len(recent365) > 0
+        else latest.get("win_pct_last_365_days", pd.NA))
+
+    previous_match_win = latest.get("label_win", latest.get("previous_match_win", pd.NA))
+    current_win_streak = _current_win_streak_from_history(hist)
+
+    round_key = _normalize_round_name(round_name)
+    round_hist = hist[hist["round"].fillna("UNK").astype(str).str.upper().str.strip() == round_key].copy()
+    round_win_pct = (round_hist["label_win"].mean()
+        if len(round_hist) > 0
+        else latest.get("round_win_pct", pd.NA))
+
     return {
         "player_id": resolved.player_id,
         "player_name": resolved.player_name,
@@ -314,23 +506,41 @@ def _build_player_state(
         "player_surface_elo_pre": current_surface_elo,
         "matches_played": int(len(hist)),
         "win_rate_last10": win_rate_last10,
+        "win_pct_last_365_days": win_pct_last_365_days,
+        "previous_match_win": previous_match_win,
+        "round_win_pct": round_win_pct,
+        "current_win_streak": current_win_streak,
         "aces_avg_last10": aces_avg_last10,
+        "ace_pct_last10": ace_pct_last10,
+        "df_pct_last10": df_pct_last10,
+        "first_serve_in_pct_last10": first_serve_in_pct_last10,
+        "ace_vs_df_last10": ace_vs_df_last10,
+        "second_serve_won_per_service_game_last10": second_serve_won_per_service_game_last10,
         "serve_win_pct_last10": serve_win_pct_last10,
         "return_win_pct_last10": return_win_pct_last10,
         "bp_conversion_last10": bp_conversion_last10,
+        "bp_saved_pct_last10": bp_saved_pct_last10,
         "days_since_last_match": days_since_last_match,
+        "matches_last_7_days": int(len(recent7)),
         "matches_last_30_days": int(len(recent30)),
+        "matches_last_365_days": int(len(recent365)),
+        "surface_win_pct_last10": surface_win_pct_last10,
         "serve_win_pct_last10_surface": serve_win_pct_last10_surface,
         "return_win_pct_last10_surface": return_win_pct_last10_surface,
         "bp_conversion_last10_surface": bp_conversion_last10_surface,
+        "bp_saved_pct_last10_surface": bp_saved_pct_last10_surface,
         "days_since_last_match_surface": days_since_last_match_surface,
         "matches_last_30_days_surface": int(len(recent30_surface)),
     }
 
 
 def _build_baseline_row(state_a: dict, state_b: dict, tour: str, as_of_date: pd.Timestamp, surface: str | None,
-    round_name: str | None, best_of: int | None, delta_h2h: float, ) -> pd.DataFrame:
+    round_name: str | None, best_of: int | None, tourney_level: str | None, h2h_summary: dict,
+    common_opponent_summary: dict, ) -> pd.DataFrame:
     round_ordinal = _round_to_ordinal(round_name)
+    tourney_level = _normalize_tourney_level(tourney_level)
+    hand_a = _normalize_hand(state_a["player_hand"])
+    hand_b = _normalize_hand(state_b["player_hand"])
 
     row = {
         "match_id": f"predict__{as_of_date.date()}__{state_a['player_id']}__{state_b['player_id']}",
@@ -339,16 +549,13 @@ def _build_baseline_row(state_a: dict, state_b: dict, tour: str, as_of_date: pd.
         "surface": surface if surface is not None else pd.NA,
         "round": round_name if round_name is not None else pd.NA,
         "best_of": best_of if best_of is not None else pd.NA,
+        "tourney_level": tourney_level,
 
         "player_id_a": state_a["player_id"],
         "player_name_a": state_a["player_name"],
         "player_id_b": state_b["player_id"],
         "player_name_b": state_b["player_name"],
-        "handedness_combo": (
-            f"{str(state_a['player_hand']) if pd.notna(state_a['player_hand']) else 'U'}"
-            f"_vs_"
-            f"{str(state_b['player_hand']) if pd.notna(state_b['player_hand']) else 'U'}"
-        ),
+        "handedness_combo": f"{hand_a}_vs_{hand_b}",
 
         "label_player_a_win": pd.NA,
 
@@ -360,27 +567,63 @@ def _build_baseline_row(state_a: dict, state_b: dict, tour: str, as_of_date: pd.
         "delta_elo": state_a["player_elo_pre"] - state_b["player_elo_pre"],
 
         "delta_surface_elo": state_a["player_surface_elo_pre"] - state_b["player_surface_elo_pre"],
+        "delta_surface_advantage": (
+            (state_a["player_surface_elo_pre"] - state_a["player_elo_pre"])
+            - (state_b["player_surface_elo_pre"] - state_b["player_elo_pre"])
+        ),
 
         "delta_age": state_a["player_age"] - state_b["player_age"],
+        "delta_age_30": _age_peak_closeness(state_a["player_age"]) - _age_peak_closeness(state_b["player_age"]),
+        "delta_age_int": (
+            _age_peak_distance_squared(state_a["player_age"])
+            - _age_peak_distance_squared(state_b["player_age"])
+        ),
         "delta_height": state_a["player_ht"] - state_b["player_ht"],
 
         "delta_matches_played": state_a["matches_played"] - state_b["matches_played"],
         "delta_win_rate_last10": state_a["win_rate_last10"] - state_b["win_rate_last10"],
+        "delta_win_pct_last_365_days": state_a["win_pct_last_365_days"] - state_b["win_pct_last_365_days"],
+        "delta_previous_match_win": state_a["previous_match_win"] - state_b["previous_match_win"],
+        "delta_round_win_pct": state_a["round_win_pct"] - state_b["round_win_pct"],
+        "delta_current_win_streak": state_a["current_win_streak"] - state_b["current_win_streak"],
         "delta_aces_avg_last10": state_a["aces_avg_last10"] - state_b["aces_avg_last10"],
+        "delta_ace_pct_last10": state_a["ace_pct_last10"] - state_b["ace_pct_last10"],
+        "delta_df_pct_last10": state_a["df_pct_last10"] - state_b["df_pct_last10"],
+        "delta_first_serve_in_pct_last10": state_a["first_serve_in_pct_last10"] - state_b["first_serve_in_pct_last10"],
+        "delta_ace_vs_df_last10": state_a["ace_vs_df_last10"] - state_b["ace_vs_df_last10"],
+        "delta_second_serve_won_per_service_game_last10": (
+            state_a["second_serve_won_per_service_game_last10"]
+            - state_b["second_serve_won_per_service_game_last10"]
+        ),
         "delta_serve_win_pct_last10": state_a["serve_win_pct_last10"] - state_b["serve_win_pct_last10"],
         "delta_return_win_pct_last10": state_a["return_win_pct_last10"] - state_b["return_win_pct_last10"],
         "delta_bp_conversion_last10": state_a["bp_conversion_last10"] - state_b["bp_conversion_last10"],
+        "delta_bp_saved_pct_last10": state_a["bp_saved_pct_last10"] - state_b["bp_saved_pct_last10"],
         "delta_days_since_last_match": state_a["days_since_last_match"] - state_b["days_since_last_match"],
+        "delta_matches_last_7_days": state_a["matches_last_7_days"] - state_b["matches_last_7_days"],
         "delta_matches_last_30_days": state_a["matches_last_30_days"] - state_b["matches_last_30_days"],
+        "delta_matches_last_365_days": state_a["matches_last_365_days"] - state_b["matches_last_365_days"],
+        "delta_surface_win_pct_last10": state_a["surface_win_pct_last10"] - state_b["surface_win_pct_last10"],
+        "delta_hand_win_pct_last10": state_a["hand_win_pct_last10"] - state_b["hand_win_pct_last10"],
         "delta_serve_win_pct_last10_surface": (state_a["serve_win_pct_last10_surface"] - state_b["serve_win_pct_last10_surface"]),
         "delta_return_win_pct_last10_surface": (state_a["return_win_pct_last10_surface"] - state_b["return_win_pct_last10_surface"]),
         "delta_bp_conversion_last10_surface": (state_a["bp_conversion_last10_surface"] - state_b["bp_conversion_last10_surface"]),
+        "delta_bp_saved_pct_last10_surface": (state_a["bp_saved_pct_last10_surface"] - state_b["bp_saved_pct_last10_surface"]),
         "delta_days_since_last_match_surface": (state_a["days_since_last_match_surface"] - state_b["days_since_last_match_surface"]),
         "delta_matches_last_30_days_surface": (state_a["matches_last_30_days_surface"] - state_b["matches_last_30_days_surface"]),
-        "delta_h2h": delta_h2h,
+        "delta_h2h": h2h_summary["delta_h2h"],
+        "delta_h2h_wins": h2h_summary["delta_h2h_wins"],
+        "delta_h2h_losses": h2h_summary["delta_h2h_losses"],
+        "h2h_matches_total": h2h_summary["h2h_matches_total"],
+        "first_meeting": h2h_summary["first_meeting"],
+        "common_opp_count": common_opponent_summary["common_opp_count"],
+        "delta_common_opp_win_pct": common_opponent_summary["delta_common_opp_win_pct"],
+        "delta_common_opp_matches": common_opponent_summary["delta_common_opp_matches"],
 
         "is_clay": int(surface == "Clay") if surface is not None else pd.NA,
         "is_grass": int(surface == "Grass") if surface is not None else pd.NA,
+        "same_hand": int(hand_a == hand_b and hand_a != "U"),
+        "round_rr": _is_round_robin(round_name),
         "round_ordinal": round_ordinal,
     }
 
@@ -390,7 +633,7 @@ def _build_baseline_row(state_a: dict, state_b: dict, tour: str, as_of_date: pd.
 
 def predict_match_probability(project_root: Path, tour: str, requested_player_a: str, requested_player_b: str,
     match_date: str, surface: str | None = None, round_name: str | None = None, best_of: int | None = None,
-    source: str = "sackmann", model: str = "logit", ) -> dict:
+    tourney_level: str | None = None, source: str = "sackmann", model: str = "logit", ) -> dict:
 
     tour = tour.lower().strip()
     if tour not in {"atp", "wta"}:
@@ -415,8 +658,20 @@ def predict_match_probability(project_root: Path, tour: str, requested_player_a:
     resolved_a = _resolve_player(long_df, requested_player_a, as_of_date)
     resolved_b = _resolve_player(long_df, requested_player_b, as_of_date)
 
-    state_req_a = _build_player_state(long_df, resolved_a, as_of_date, surface)
-    state_req_b = _build_player_state(long_df, resolved_b, as_of_date, surface)
+    state_req_a = _build_player_state(long_df, resolved_a, as_of_date, surface, round_name)
+    state_req_b = _build_player_state(long_df, resolved_b, as_of_date, surface, round_name)
+    state_req_a["hand_win_pct_last10"] = _compute_hand_win_pct_before_date(
+        long_df=long_df,
+        player_id=state_req_a["player_id"],
+        opponent_hand=state_req_b["player_hand"],
+        as_of_date=as_of_date,
+    )
+    state_req_b["hand_win_pct_last10"] = _compute_hand_win_pct_before_date(
+        long_df=long_df,
+        player_id=state_req_b["player_id"],
+        opponent_hand=state_req_a["player_hand"],
+        as_of_date=as_of_date,
+    )
 
     key_a = _player_sort_key(state_req_a["player_id"], state_req_a["player_name"])
     key_b = _player_sort_key(state_req_b["player_id"], state_req_b["player_name"])
@@ -430,7 +685,13 @@ def predict_match_probability(project_root: Path, tour: str, requested_player_a:
         state_internal_b = state_req_a
         requested_a_is_internal_a = False
 
-    delta_h2h = _compute_h2h_delta_before_date(
+    h2h_summary = _compute_h2h_summary_before_date(
+        long_df=long_df,
+        player_a_id=state_internal_a["player_id"],
+        player_b_id=state_internal_b["player_id"],
+        as_of_date=as_of_date,
+    )
+    common_opponent_summary = _compute_common_opponent_summary_before_date(
         long_df=long_df,
         player_a_id=state_internal_a["player_id"],
         player_b_id=state_internal_b["player_id"],
@@ -445,7 +706,9 @@ def predict_match_probability(project_root: Path, tour: str, requested_player_a:
         surface=surface,
         round_name=round_name,
         best_of=best_of,
-        delta_h2h=delta_h2h,
+        tourney_level=tourney_level,
+        h2h_summary=h2h_summary,
+        common_opponent_summary=common_opponent_summary,
     )
 
     surface_specific = surface is not None
@@ -502,6 +765,7 @@ def predict_match_probability(project_root: Path, tour: str, requested_player_a:
         "surface": surface,
         "round": round_name,
         "best_of": best_of,
+        "tourney_level": _normalize_tourney_level(tourney_level),
         "requested_player_a": requested_player_a,
         "requested_player_b": requested_player_b,
         "canonical_player_a": resolved_a.player_name,

@@ -78,6 +78,7 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "tour": df["tour"],
             "tourney_date": _safe_col(df, "tourney_date"),
             "tourney_name": _safe_col(df, "tourney_name"),
+            "tourney_level": _safe_col(df, "tourney_level", "U"),
             "surface": _safe_col(df, "surface"),
             "round": _safe_col(df, "round"),
             "best_of": _safe_col(df, "best_of"),
@@ -142,6 +143,7 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
             "tour": df["tour"],
             "tourney_date": _safe_col(df, "tourney_date"),
             "tourney_name": _safe_col(df, "tourney_name"),
+            "tourney_level": _safe_col(df, "tourney_level", "U"),
             "surface": _safe_col(df, "surface"),
             "round": _safe_col(df, "round"),
             "best_of": _safe_col(df, "best_of"),
@@ -245,8 +247,10 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
     long_df["first_serve_won_pct"] = long_df["first_won"] / long_df["first_in"]
     long_df["second_serve_attempts"] = long_df["serve_points"] - long_df["first_in"]
     long_df["second_serve_won_pct"] = long_df["second_won"] / long_df["second_serve_attempts"]
+    long_df["second_serve_won_per_service_game"] = long_df["second_won"] / long_df["service_games"]
     long_df["aces_per_service_point"] = long_df["aces"] / long_df["serve_points"]
     long_df["df_per_service_point"] = long_df["double_faults"] / long_df["serve_points"]
+    long_df["ace_vs_df"] = long_df["aces"] / long_df["double_faults"].replace(0, pd.NA)
     long_df["bp_saved_pct"] = long_df["break_points_saved"] / long_df["break_points_faced"]
 
     # Service points won
@@ -274,6 +278,7 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
         "tour",
         "tourney_date",
         "tourney_name",
+        "tourney_level",
         "surface",
         "round",
         "best_of",
@@ -296,6 +301,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
         "first_serve_in_pct",
         "first_serve_won_pct",
         "second_serve_won_pct",
+        "second_serve_won_per_service_game",
+        "ace_vs_df",
         "service_points_won_pct",
         "bp_saved_pct",
         "return_points_won_pct",

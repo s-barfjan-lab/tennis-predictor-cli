@@ -5,13 +5,16 @@ from typing import Any
 
 import pandas as pd
 import xgboost as xgb
+from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 
 from sklearn.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
+from tennis_cli.models.dataset import get_categorical_feature_columns, get_numeric_feature_columns
 from tennis_cli.models.split import build_inner_time_series_cv
 
 
@@ -46,7 +49,7 @@ def get_xgb_param_grid(search_profile: str = "base") -> list[dict]:
 
     if search_profile == "base":
         return [{
-                "model__n_estimators": [300, 600],
+                "model__n_estimators": [300, 600, 1000, 1500],
                 "model__learning_rate": [0.03, 0.05],
                 "model__max_depth": [3, 4],
                 "model__min_child_weight": [1, 5],
@@ -58,7 +61,7 @@ def get_xgb_param_grid(search_profile: str = "base") -> list[dict]:
 
     if search_profile == "richer":
         return [{
-                "model__n_estimators": [300, 600, 1000],
+                "model__n_estimators": [300, 600, 1000, 1500],
                 "model__learning_rate": [0.02, 0.03],
                 "model__max_depth": [3, 4],
                 "model__min_child_weight": [1, 3],
@@ -72,23 +75,52 @@ def get_xgb_param_grid(search_profile: str = "base") -> list[dict]:
 
 
 
-def _as_feature_frame(X: pd.DataFrame, columns: list[str], imputer: SimpleImputer, fit: bool, ) -> pd.DataFrame:
+def build_xgb_preprocessor(surface_specific: bool = False) -> ColumnTransformer:
+    """
+    Preprocess raw numeric and categorical model columns for XGBoost.
+    """
+    numeric_features = get_numeric_feature_columns(surface_specific=surface_specific)
+    categorical_features = get_categorical_feature_columns()
+
+    return ColumnTransformer(
+        transformers=[
+            ("numeric", SimpleImputer(strategy="median"), numeric_features),
+            (
+                "categorical",
+                Pipeline(steps=[
+                    ("imputer", SimpleImputer(strategy="most_frequent")),
+                    ("onehot", OneHotEncoder(handle_unknown="ignore")),
+                ]),
+                categorical_features,
+            ),
+        ]
+    )
+
+
+def _dense_values(values):
+    if hasattr(values, "toarray"):
+        return values.toarray()
+    return values
+
+
+def _as_feature_frame(X: pd.DataFrame, preprocessor: ColumnTransformer, fit: bool, ) -> pd.DataFrame:
 
     if fit:
-        values = imputer.fit_transform(X[columns])
+        values = preprocessor.fit_transform(X)
     else:
-        values = imputer.transform(X[columns])
+        values = preprocessor.transform(X)
 
-    return pd.DataFrame(values, columns=columns, index=X.index)
+    columns = list(preprocessor.get_feature_names_out())
+    return pd.DataFrame(_dense_values(values), columns=columns, index=X.index)
 
 
-def build_xgb_search_pipeline(random_state: int = 42) -> Pipeline:
+def build_xgb_search_pipeline(random_state: int = 42, surface_specific: bool = False) -> Pipeline:
     """
     Pipeline used only for XGB hyperparameter tuning.
 
     We do not use early stopping inside GridSearchCV.
     """
-    return Pipeline(steps=[("imputer", SimpleImputer(strategy="median")),
+    return Pipeline(steps=[("preprocessor", build_xgb_preprocessor(surface_specific=surface_specific)),
             ("model", xgb.XGBClassifier(
                     objective="binary:logistic",
                     eval_metric="logloss",
@@ -99,15 +131,16 @@ def build_xgb_search_pipeline(random_state: int = 42) -> Pipeline:
 
 
 def fit_xgb_classifier(X_train: pd.DataFrame, y_train: pd.Series, X_val: pd.DataFrame, y_val: pd.Series, feature_columns: list[str],
-    config: XGBConfig | None = None, sample_weight: pd.Series | None = None, ) -> dict[str, Any]:
+    config: XGBConfig | None = None, sample_weight: pd.Series | None = None, surface_specific: bool = False,
+    ) -> dict[str, Any]:
 
     if config is None:
         config = XGBConfig()
 
-    imputer = SimpleImputer(strategy="median")
+    preprocessor = build_xgb_preprocessor(surface_specific=surface_specific)
 
-    X_train_imp = _as_feature_frame(X=X_train, columns=feature_columns, imputer=imputer, fit=True, )
-    X_val_imp = _as_feature_frame(X=X_val, columns=feature_columns, imputer=imputer, fit=False, )
+    X_train_imp = _as_feature_frame(X=X_train[feature_columns], preprocessor=preprocessor, fit=True, )
+    X_val_imp = _as_feature_frame(X=X_val[feature_columns], preprocessor=preprocessor, fit=False, )
 
     model = xgb.XGBClassifier(
         objective="binary:logistic",
@@ -137,7 +170,8 @@ def fit_xgb_classifier(X_train: pd.DataFrame, y_train: pd.Series, X_val: pd.Data
 
     return {"model_type": "xgb",
         "feature_columns": feature_columns,
-        "imputer": imputer,
+        "encoded_feature_columns": list(X_train_imp.columns),
+        "preprocessor": preprocessor,
         "model": model,
         "config": asdict(config),
         "best_iteration": getattr(model, "best_iteration", None), }
@@ -145,12 +179,13 @@ def fit_xgb_classifier(X_train: pd.DataFrame, y_train: pd.Series, X_val: pd.Data
 
 
 def tune_xgb_classifier(X_train: pd.DataFrame, y_train: pd.Series, sample_weight: pd.Series | None = None, n_splits: int = 3,
-    refit_metric: str = "neg_log_loss", random_state: int = 42, search_profile: str = "base", ) -> GridSearchCV:
+    refit_metric: str = "neg_log_loss", random_state: int = 42, search_profile: str = "base",
+    surface_specific: bool = False, ) -> GridSearchCV:
     """
     Tune XGBoost using inner time-series CV on the training split only.
     """
-    pipeline = build_xgb_search_pipeline(random_state=random_state)
-    cv = build_inner_time_series_cv(n_splits=n_splits)
+    pipeline = build_xgb_search_pipeline(random_state=random_state, surface_specific=surface_specific)
+    cv = build_inner_time_series_cv(n_splits=n_splits, n_samples=len(X_train))
 
     search = GridSearchCV(estimator=pipeline, param_grid=get_xgb_param_grid(search_profile=search_profile),
         scoring={"neg_log_loss": "neg_log_loss", "roc_auc": "roc_auc", "accuracy": "accuracy", }, refit=refit_metric,
@@ -164,12 +199,12 @@ def tune_xgb_classifier(X_train: pd.DataFrame, y_train: pd.Series, sample_weight
     return search
 
 
-def xgb_config_from_gridsearch_best_params(best_params: dict) -> XGBConfig:
+
+def xgb_config_from_gridsearch_best_params(best_params: dict, random_state: int = 42) -> XGBConfig:
     """
     Convert GridSearchCV best_params_ into our XGBConfig dataclass.
     """
-    return XGBConfig(
-        n_estimators=best_params["model__n_estimators"],
+    return XGBConfig(n_estimators=best_params["model__n_estimators"],
         learning_rate=best_params["model__learning_rate"],
         max_depth=best_params["model__max_depth"],
         min_child_weight=best_params["model__min_child_weight"],
@@ -178,16 +213,21 @@ def xgb_config_from_gridsearch_best_params(best_params: dict) -> XGBConfig:
         reg_lambda=best_params["model__reg_lambda"],
         reg_alpha=best_params["model__reg_alpha"],
         gamma=best_params.get("model__gamma", 0.0),
-    )
-
+        random_state=random_state, )
 
 
 def predict_proba_from_xgb_artifact(artifact: dict[str, Any], X: pd.DataFrame, ) -> pd.Series:
     feature_columns = artifact["feature_columns"]
-    imputer = artifact["imputer"]
     model = artifact["model"]
 
-    X_imp = pd.DataFrame(imputer.transform(X[feature_columns]), columns=feature_columns, index=X.index, )
+    if "preprocessor" in artifact:
+        preprocessor = artifact["preprocessor"]
+        values = preprocessor.transform(X[feature_columns])
+        encoded_columns = artifact.get("encoded_feature_columns", list(preprocessor.get_feature_names_out()))
+        X_imp = pd.DataFrame(_dense_values(values), columns=encoded_columns, index=X.index, )
+    else:
+        imputer = artifact["imputer"]
+        X_imp = pd.DataFrame(imputer.transform(X[feature_columns]), columns=feature_columns, index=X.index, )
 
     probs = model.predict_proba(X_imp)[:, 1]
     return pd.Series(probs, index=X.index, name="pred_prob")
@@ -199,7 +239,8 @@ def feature_importance_from_xgb_artifact(artifact: dict[str, Any], importance_ty
     raw_scores = booster.get_score(importance_type=importance_type)
 
     rows = []
-    for feature_name in artifact["feature_columns"]:
+    feature_columns = artifact.get("encoded_feature_columns", artifact["feature_columns"])
+    for feature_name in feature_columns:
         rows.append({"feature": feature_name, "importance": float(raw_scores.get(feature_name, 0.0)), "importance_type": importance_type, })
 
     out = pd.DataFrame(rows).sort_values("importance", ascending=False, ignore_index=True, )

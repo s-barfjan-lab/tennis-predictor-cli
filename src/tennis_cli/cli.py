@@ -130,6 +130,7 @@ def predict_match_cmd(
     surface: str = typer.Option(None, "--surface", help="Surface: Hard, Clay, Grass"),
     round_name: str = typer.Option(None, "--round", help="Round: RR, R128, R64, R32, R16, QF, SF, F"),
     best_of: int = typer.Option(None, "--best-of", help="Best of sets, e.g. 3 or 5"),
+    tourney_level: str = typer.Option(None, "--tourney-level", help="Tournament level, e.g. G, M, A, C"),
     source: str = typer.Option("sackmann", "--source", help="Source: sackmann or tml"),
     model: str = typer.Option("logit", "--model", help="Model type: logit or xgb"),
 ):
@@ -162,6 +163,7 @@ def predict_match_cmd(
         surface=surface,
         round_name=round_name,
         best_of=best_of,
+        tourney_level=tourney_level,
         source=source,
         model=model,
     )
@@ -175,6 +177,7 @@ def predict_match_cmd(
     console.print(f"[bold]Surface:[/] {result['surface']}")
     console.print(f"[bold]Round:[/] {result['round']}")
     console.print(f"[bold]Best of:[/] {result['best_of']}")
+    console.print(f"[bold]Tournament level:[/] {result['tourney_level']}")
     console.print(f"[bold]Requested matchup:[/] {result['requested_player_a']} vs {result['requested_player_b']}")
     console.print(f"[bold]Canonical matchup:[/] {result['canonical_player_a']} vs {result['canonical_player_b']}")
 

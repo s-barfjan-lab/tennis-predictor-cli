@@ -153,14 +153,37 @@ def summarize_surface_balance(df: pd.DataFrame, config: TimeSplitConfig | None =
     return summary_df
 
 
-def build_inner_time_series_cv(n_splits: int = 3) -> TimeSeriesSplit:
+def build_inner_time_series_cv(
+    n_splits: int = 5,
+    n_samples: int | None = None,
+    validation_fraction: float = 0.10,
+    gap: int = 0,
+) -> TimeSeriesSplit:
     """
     Build the inner cross-validation splitter used for hyperparameter tuning
     on the training portion only.
 
-    We use TimeSeriesSplit to preserve chronology inside the training split.
+    We use fixed-size validation blocks so each fold is closer to a single
+    recent operational slice instead of sklearn's default expanding test size.
     """
     if n_splits < 2:
         raise ValueError("n_splits must be at least 2")
 
-    return TimeSeriesSplit(n_splits=n_splits)
+    if not 0 < validation_fraction < 1:
+        raise ValueError("validation_fraction must be between 0 and 1")
+
+    test_size = None
+    if n_samples is not None:
+        if n_samples <= 0:
+            raise ValueError("n_samples must be positive")
+
+        test_size = max(1, int(validation_fraction * n_samples))
+        required_rows = (n_splits * test_size) + gap + 1
+        if required_rows > n_samples:
+            raise ValueError(
+                "Not enough rows for requested inner CV: "
+                f"n_samples={n_samples}, n_splits={n_splits}, "
+                f"test_size={test_size}, gap={gap}"
+            )
+
+    return TimeSeriesSplit(n_splits=n_splits, test_size=test_size, gap=gap)

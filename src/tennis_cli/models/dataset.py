@@ -11,44 +11,113 @@ VALID_SURFACES = {"HARD", "CLAY", "GRASS"}
 
 GLOBAL_FEATURE_COLUMNS = [
     "delta_rank_adv",
+    "delta_rank_points",
+    "delta_elo",
     "delta_surface_elo",
+    "delta_surface_advantage",
+    "delta_ace_pct_last10",
+    "delta_df_pct_last10",
+    "delta_first_serve_in_pct_last10",
+    "delta_ace_vs_df_last10",
+    "delta_second_serve_won_per_service_game_last10",
     "delta_serve_win_pct_last10",
     "delta_return_win_pct_last10",
     "delta_bp_conversion_last10",
+    "delta_bp_saved_pct_last10",
     "delta_serve_win_pct_last10_surface",
     "delta_return_win_pct_last10_surface",
     "delta_bp_conversion_last10_surface",
+    "delta_bp_saved_pct_last10_surface",
     "delta_h2h",
+    "delta_h2h_wins",
+    "delta_h2h_losses",
+    "h2h_matches_total",
+    "first_meeting",
+    "common_opp_count",
+    "delta_common_opp_win_pct",
+    "delta_common_opp_matches",
+    "delta_matches_played",
+    "delta_win_rate_last10",
+    "delta_win_pct_last_365_days",
+    "delta_previous_match_win",
+    "delta_round_win_pct",
+    "delta_current_win_streak",
+    "delta_aces_avg_last10",
     "delta_days_since_last_match",
+    "delta_matches_last_7_days",
     "delta_matches_last_30_days",
+    "delta_matches_last_365_days",
+    "delta_surface_win_pct_last10",
+    "delta_hand_win_pct_last10",
     "delta_days_since_last_match_surface",
     "delta_matches_last_30_days_surface",
     "delta_age",
+    "delta_age_30",
+    "delta_age_int",
     "delta_height",
     "is_clay",
     "is_grass",
+    "same_hand",
+    "round_rr",
     "round_ordinal",
     "best_of",
 ]
 
 SURFACE_MODEL_FEATURE_COLUMNS = [
     "delta_rank_adv",
+    "delta_rank_points",
+    "delta_elo",
     "delta_surface_elo",
+    "delta_surface_advantage",
+    "delta_ace_pct_last10",
+    "delta_df_pct_last10",
+    "delta_first_serve_in_pct_last10",
+    "delta_ace_vs_df_last10",
+    "delta_second_serve_won_per_service_game_last10",
     "delta_serve_win_pct_last10",
     "delta_return_win_pct_last10",
     "delta_bp_conversion_last10",
+    "delta_bp_saved_pct_last10",
     "delta_serve_win_pct_last10_surface",
     "delta_return_win_pct_last10_surface",
     "delta_bp_conversion_last10_surface",
+    "delta_bp_saved_pct_last10_surface",
     "delta_h2h",
+    "delta_h2h_wins",
+    "delta_h2h_losses",
+    "h2h_matches_total",
+    "first_meeting",
+    "common_opp_count",
+    "delta_common_opp_win_pct",
+    "delta_common_opp_matches",
+    "delta_matches_played",
+    "delta_win_rate_last10",
+    "delta_win_pct_last_365_days",
+    "delta_previous_match_win",
+    "delta_round_win_pct",
+    "delta_current_win_streak",
+    "delta_aces_avg_last10",
     "delta_days_since_last_match",
+    "delta_matches_last_7_days",
     "delta_matches_last_30_days",
+    "delta_matches_last_365_days",
+    "delta_surface_win_pct_last10",
+    "delta_hand_win_pct_last10",
     "delta_days_since_last_match_surface",
     "delta_matches_last_30_days_surface",
     "delta_age",
+    "delta_age_30",
+    "delta_age_int",
     "delta_height",
+    "same_hand",
+    "round_rr",
     "round_ordinal",
     "best_of",
+]
+
+CATEGORICAL_FEATURE_COLUMNS = [
+    "handedness_combo",
+    "tourney_level",
 ]
 
 METADATA_COLUMNS = [
@@ -58,6 +127,7 @@ METADATA_COLUMNS = [
     "surface",
     "round",
     "best_of",
+    "tourney_level",
     "player_id_a",
     "player_name_a",
     "player_id_b",
@@ -133,7 +203,7 @@ def _validate_required_columns(df: pd.DataFrame) -> None:
     Ensure the dataframe contains the minimum schema required
     for baseline training.
     """
-    required = set(GLOBAL_FEATURE_COLUMNS + [TARGET_COLUMN, "tourney_date", "match_id"])
+    required = set(get_feature_columns() + [TARGET_COLUMN, "tourney_date", "match_id"])
     missing = sorted(required - set(df.columns))
     if missing:
         raise ValueError("Baseline dataset is missing required columns: " + ", ".join(missing))
@@ -157,6 +227,9 @@ def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
 
     for col in GLOBAL_FEATURE_COLUMNS:
         out[col] = pd.to_numeric(out[col], errors="coerce")
+
+    for col in CATEGORICAL_FEATURE_COLUMNS:
+        out[col] = out[col].fillna("U").astype(str)
 
     return out
 
@@ -191,7 +264,7 @@ def load_baseline_dataframe(project_root: Path, tour: str, source: str = "sackma
     return df
 
 
-def get_feature_columns(surface_specific: bool = False) -> list[str]:
+def get_numeric_feature_columns(surface_specific: bool = False) -> list[str]:
     """
     Return the ordered list of numeric model features.
 
@@ -206,6 +279,20 @@ def get_feature_columns(surface_specific: bool = False) -> list[str]:
         return SURFACE_MODEL_FEATURE_COLUMNS.copy()
 
     return GLOBAL_FEATURE_COLUMNS.copy()
+
+
+def get_categorical_feature_columns() -> list[str]:
+    """
+    Return the ordered list of categorical model features.
+    """
+    return CATEGORICAL_FEATURE_COLUMNS.copy()
+
+
+def get_feature_columns(surface_specific: bool = False) -> list[str]:
+    """
+    Return the ordered list of raw model feature columns.
+    """
+    return get_numeric_feature_columns(surface_specific=surface_specific) + get_categorical_feature_columns()
 
 
 def get_metadata_columns(df: pd.DataFrame) -> list[str]:
