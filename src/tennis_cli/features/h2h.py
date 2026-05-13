@@ -24,7 +24,17 @@ def compute_h2h_features(long_df: pd.DataFrame) -> pd.DataFrame:
 
     df = long_df.copy()
     df["tourney_date"] = pd.to_datetime(df["tourney_date"], errors="coerce")
-    df = df.sort_values(["tourney_date", "match_id", "player_id"]).reset_index(drop=True)
+    sort_keys = ["tourney_date"]
+    if "tourney_id" in df.columns:
+        sort_keys.append("tourney_id")
+    if "match_num" in df.columns:
+        df = df.copy()
+        df["match_num"] = pd.to_numeric(df["match_num"], errors="coerce")
+        sort_keys.append("match_num")
+    else:
+        sort_keys.append("match_id")
+    sort_keys.append("player_id")
+    df = df.sort_values(sort_keys).reset_index(drop=True)
 
     h2h_tracker: dict[tuple[str, str], int] = {}
 

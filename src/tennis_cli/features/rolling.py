@@ -9,6 +9,7 @@ def _rolling_mean_past(series: pd.Series, window: int) -> pd.Series:
     Mean over the previous `window` matches only.
     The current match is excluded via shift(1).
     """
+    series = pd.to_numeric(series, errors="coerce")
     return series.shift(1).rolling(window=window, min_periods=1).mean()
 
 
@@ -17,6 +18,7 @@ def _expanding_mean_past(series: pd.Series) -> pd.Series:
     Mean over all previous rows only.
     The current match is excluded via shift(1).
     """
+    series = pd.to_numeric(series, errors="coerce")
     return series.shift(1).expanding(min_periods=1).mean()
 
 
@@ -132,7 +134,19 @@ def add_rolling_features(long_df: pd.DataFrame, window: int = 10) -> pd.DataFram
         raise ValueError(f"Missing required columns for rolling features: {missing}")
 
     df["tourney_date"] = pd.to_datetime(df["tourney_date"], errors="coerce")
-    df = df.sort_values(["player_id", "tourney_date", "match_id"]).reset_index(drop=True)
+    # Within a tournament, every match shares tourney_date (Sackmann's Monday-of-week
+    # convention). Chronology inside a tournament is encoded in numeric match_num.
+    # Sorting by string match_id is lexicographic and puts "100" before "5".
+    sort_keys = ["player_id", "tourney_date"]
+    if "tourney_id" in df.columns:
+        sort_keys.append("tourney_id")
+    if "match_num" in df.columns:
+        df = df.copy()
+        df["match_num"] = pd.to_numeric(df["match_num"], errors="coerce")
+        sort_keys.append("match_num")
+    else:
+        sort_keys.append("match_id")
+    df = df.sort_values(sort_keys).reset_index(drop=True)
 
     grouped = df.groupby("player_id", group_keys=False)
 

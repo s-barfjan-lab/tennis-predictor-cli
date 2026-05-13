@@ -76,6 +76,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
         {
             "match_id": df["match_id"],
             "tour": df["tour"],
+            "tourney_id": _safe_col(df, "tourney_id"),
+            "match_num": _safe_col(df, "match_num"),
             "tourney_date": _safe_col(df, "tourney_date"),
             "tourney_name": _safe_col(df, "tourney_name"),
             "tourney_level": _safe_col(df, "tourney_level", "U"),
@@ -141,6 +143,8 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
         {
             "match_id": df["match_id"],
             "tour": df["tour"],
+            "tourney_id": _safe_col(df, "tourney_id"),
+            "match_num": _safe_col(df, "match_num"),
             "tourney_date": _safe_col(df, "tourney_date"),
             "tourney_name": _safe_col(df, "tourney_name"),
             "tourney_level": _safe_col(df, "tourney_level", "U"),
@@ -204,6 +208,7 @@ def build_long_view(matches_df: pd.DataFrame, tour: str) -> pd.DataFrame:
     # Numeric cleanup where possible
     numeric_cols = [
         "player_ht",
+        "match_num",
         "player_age",
         "player_rank",
         "player_rank_points",
