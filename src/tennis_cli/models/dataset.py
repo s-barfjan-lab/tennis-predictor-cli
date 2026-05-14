@@ -8,6 +8,8 @@ import pandas as pd
 
 TARGET_COLUMN = "label_player_a_win"
 VALID_SURFACES = {"HARD", "CLAY", "GRASS"}
+VALID_ROUNDS = {"R128", "R64", "R32", "R16", "QF", "SF", "F", "RR"}
+DROP_MODEL_ROUNDS = {"BR", "3RD/4TH"}
 
 GLOBAL_FEATURE_COLUMNS = [
     "delta_rank_adv",
@@ -198,6 +200,30 @@ def _drop_invalid_surfaces(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _drop_invalid_rounds(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Keep only the main model round map.
+
+    Bronze / third-place matches are deliberately removed because they are not
+    part of the normal main-draw progression encoded by round_ordinal.
+    """
+    if "round" not in df.columns:
+        raise ValueError("Baseline dataset does not contain a 'round' column.")
+
+    out = df.copy()
+    round_norm = out["round"].astype(str).str.upper().str.strip()
+    out = out[~round_norm.isin(DROP_MODEL_ROUNDS)].copy()
+
+    remaining = sorted(set(out["round"].astype(str).str.upper().str.strip()) - VALID_ROUNDS)
+    if remaining:
+        raise ValueError("Baseline dataset contains unknown round values: " + ", ".join(remaining))
+
+    if out.empty:
+        raise ValueError("All rows were removed after invalid-round filtering.")
+
+    return out
+
+
 def _validate_required_columns(df: pd.DataFrame) -> None:
     """
     Ensure the dataframe contains the minimum schema required
@@ -249,6 +275,7 @@ def load_baseline_dataframe(project_root: Path, tour: str, source: str = "sackma
     df = pd.read_parquet(path)
     _validate_required_columns(df)
     df = _coerce_types(df)
+    df = _drop_invalid_rounds(df)
     df = _drop_invalid_surfaces(df)
 
     if surface is not None:

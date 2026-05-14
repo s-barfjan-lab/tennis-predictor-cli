@@ -18,6 +18,9 @@ ROUND_MAP = {
     "F": 7,
 }
 
+VALID_MODEL_ROUNDS = set(ROUND_MAP)
+DROP_MODEL_ROUNDS = {"BR", "3RD/4TH"}
+
 
 PEAK_TENNIS_AGE = 30.0
 
@@ -36,6 +39,28 @@ def _age_peak_closeness(age: pd.Series) -> pd.Series:
 def _age_peak_distance_squared(age: pd.Series) -> pd.Series:
     age_num = pd.to_numeric(age, errors="coerce")
     return (age_num - PEAK_TENNIS_AGE) ** 2
+
+
+def _normalize_rounds(rounds: pd.Series) -> pd.Series:
+    return rounds.fillna("").astype(str).str.upper().str.strip()
+
+
+def _drop_non_model_rounds(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Bronze / third-place matches are not part of the main-draw progression.
+    Drop them instead of forcing them into the ordinal round scale.
+    """
+    if "round" not in df.columns:
+        raise ValueError("Baseline feature build requires a 'round' column.")
+
+    round_clean = _normalize_rounds(df["round"])
+    out = df[~round_clean.isin(DROP_MODEL_ROUNDS)].copy()
+
+    remaining = sorted(set(_normalize_rounds(out["round"])) - VALID_MODEL_ROUNDS)
+    if remaining:
+        raise ValueError("Unknown round values after explicit round filtering: " + ", ".join(remaining))
+
+    return out
 
 
 def _common_opponent_summary(
@@ -178,6 +203,7 @@ def build_baseline_match_table(long_df: pd.DataFrame) -> pd.DataFrame:
     side_b = side_b.rename(columns=rename_b)
 
     wide = match_meta.merge(side_a, on="match_id", how="inner").merge(side_b, on="match_id", how="inner")
+    wide = _drop_non_model_rounds(wide)
 
     # numeric cleanup
     numeric_cols = [
@@ -239,8 +265,8 @@ def build_baseline_match_table(long_df: pd.DataFrame) -> pd.DataFrame:
     wide["is_clay"] = (surface_clean == "CLAY").astype(int)
     wide["is_grass"] = (surface_clean == "GRASS").astype(int)
 
-    round_clean = _safe_series(wide, "round", "").fillna("").astype(str).str.upper()
-    wide["round_ordinal"] = round_clean.map(ROUND_MAP).fillna(3)
+    round_clean = _normalize_rounds(_safe_series(wide, "round", ""))
+    wide["round_ordinal"] = round_clean.map(ROUND_MAP)
     wide["round_rr"] = (round_clean == "RR").astype(int)
 
     # delta features (A minus B)

@@ -5,7 +5,7 @@ from typing import Iterable
 
 import pandas as pd
 
-from tennis_cli.config import Paths
+from tennis_cli.config import Paths, get_settings
 
 
 # Keep this separate from Sackmann.
@@ -221,6 +221,45 @@ def _coerce_types(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _filter_matches(df: pd.DataFrame, drop_walkovers: bool, drop_retirements: bool) -> pd.DataFrame:
+    out = df.copy()
+
+    if drop_walkovers and "score" in out.columns:
+        out = out[~out["score"].astype(str).str.contains("W/O", case=False, na=False)]
+
+    if drop_retirements and "score" in out.columns:
+        out = out[~out["score"].astype(str).str.contains("RET", case=False, na=False)]
+
+    return out
+
+
+def _parse_tourney_dates(values: pd.Series) -> pd.Series:
+    if pd.api.types.is_datetime64_any_dtype(values):
+        return pd.to_datetime(values, errors="coerce")
+
+    cleaned = values.astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
+    return pd.to_datetime(cleaned, format="%Y%m%d", errors="coerce")
+
+
+def _filter_to_reference_date_range(df: pd.DataFrame, reference_path: Path) -> pd.DataFrame:
+    if not reference_path.exists():
+        return df
+
+    reference_dates = _parse_tourney_dates(pd.read_parquet(reference_path, columns=["tourney_date"])["tourney_date"])
+    reference_min = reference_dates.min()
+    reference_max = reference_dates.max()
+
+    if pd.isna(reference_min) or pd.isna(reference_max):
+        raise ValueError(f"Reference dataset has invalid tourney_date values: {reference_path}")
+
+    out_dates = _parse_tourney_dates(df["tourney_date"])
+    if out_dates.isna().any():
+        bad_count = int(out_dates.isna().sum())
+        raise ValueError(f"TML dataset has {bad_count} invalid tourney_date values after normalization.")
+
+    return df[(out_dates >= reference_min) & (out_dates <= reference_max)].copy()
+
+
 
 "This was added later due to bug"
 def _fill_missing_match_num(df: pd.DataFrame) -> pd.DataFrame:
@@ -247,6 +286,7 @@ def _fill_missing_match_num(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_tml_dataset(paths: Paths, start_year: int = 2015, end_year: int = 2025) -> Path:
+    settings = get_settings()
     repo_dir = paths.tml_dir / "TML-Database"
 
     if not repo_dir.exists():
@@ -287,6 +327,13 @@ def build_tml_dataset(paths: Paths, start_year: int = 2015, end_year: int = 2025
 
     final_df = pd.concat(yearly_frames, ignore_index=True)
     final_df = _coerce_types(final_df)
+    final_df = _filter_matches(
+        final_df,
+        drop_walkovers=settings.drop_walkovers,
+        drop_retirements=settings.drop_retirements,
+    )
+    reference_path = paths.processed_dir / f"atp_matches_{settings.year_min}_{settings.year_max}.parquet"
+    final_df = _filter_to_reference_date_range(final_df, reference_path)
     final_df = _fill_missing_match_num(final_df)
 
     # Optional light cleanup: sort by date when possible
