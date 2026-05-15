@@ -30,17 +30,17 @@ def load_json(path: Path):
         return None
     return json.loads(path.read_text(encoding="utf-8"))
 
-def get_logit_test_ll(path: Path):
+def get_logit_validation_ll(path: Path):
     payload = load_json(path)
     if payload is None:
         return None
-    return float(payload["test"]["log_loss"])
+    return float(payload["validation"]["log_loss"])
 
-def get_xgb_raw_test_ll(path: Path):
+def get_xgb_raw_validation_ll(path: Path):
     payload = load_json(path)
     if payload is None:
         return None
-    return float(payload["raw_test"]["log_loss"])
+    return float(payload["raw_validation"]["log_loss"])
 
 rows = []
 
@@ -55,10 +55,10 @@ for b in BRANCHES:
     xgb_base_path = MODELS / f"{tour}_xgb_baseline{suffix}_metrics.json"
     xgb_tuned_path = MODELS / f"{tour}_xgb_tuned{suffix}_metrics.json"
 
-    logit_base_ll = get_logit_test_ll(logit_base_path)
-    logit_tuned_ll = get_logit_test_ll(logit_tuned_path)
-    xgb_base_raw_ll = get_xgb_raw_test_ll(xgb_base_path)
-    xgb_tuned_raw_ll = get_xgb_raw_test_ll(xgb_tuned_path)
+    logit_base_ll = get_logit_validation_ll(logit_base_path)
+    logit_tuned_ll = get_logit_validation_ll(logit_tuned_path)
+    xgb_base_raw_ll = get_xgb_raw_validation_ll(xgb_base_path)
+    xgb_tuned_raw_ll = get_xgb_raw_validation_ll(xgb_tuned_path)
 
     logit_candidates = []
     if logit_base_ll is not None:
@@ -95,16 +95,16 @@ for b in BRANCHES:
         "tour": tour.upper(),
         "source": source,
         "surface": surface,
-        "logit_baseline_test_ll": logit_base_ll,
-        "logit_tuned_test_ll": logit_tuned_ll,
+        "logit_baseline_validation_ll": logit_base_ll,
+        "logit_tuned_validation_ll": logit_tuned_ll,
         "best_logit_model": best_logit_model,
-        "best_logit_test_ll": best_logit_ll,
-        "xgb_baseline_raw_test_ll": xgb_base_raw_ll,
-        "xgb_tuned_raw_test_ll": xgb_tuned_raw_ll,
+        "best_logit_validation_ll": best_logit_ll,
+        "xgb_baseline_raw_validation_ll": xgb_base_raw_ll,
+        "xgb_tuned_raw_validation_ll": xgb_tuned_raw_ll,
         "best_xgb_model": best_xgb_model,
-        "best_xgb_raw_test_ll": best_xgb_ll,
+        "best_xgb_raw_validation_ll": best_xgb_ll,
         "overall_precal_winner": overall_winner,
-        "overall_best_test_ll": overall_best_ll,
+        "overall_best_validation_ll": overall_best_ll,
     })
 
 df = pd.DataFrame(rows)
