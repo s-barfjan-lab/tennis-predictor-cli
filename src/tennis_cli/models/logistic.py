@@ -22,6 +22,7 @@ from tennis_cli.models.dataset import (
     get_numeric_feature_columns,
 )
 
+from tennis_cli.models._recency import compute_recency_weights_from_dates
 from tennis_cli.models.split import build_inner_time_series_cv
 
 
@@ -111,21 +112,6 @@ def get_logistic_param_grid() -> list[dict]:
             "model__class_weight": [None, "balanced"],}]
 
 
-def _compute_recency_weights_from_dates(dates: pd.Series, half_life_days: int) -> np.ndarray:
-    """
-    Compute recency weights anchored to the newest date in the provided fold.
-    """
-    if half_life_days <= 0:
-        raise ValueError("half_life_days must be positive")
-
-    parsed_dates = pd.to_datetime(dates, errors="coerce")
-    if parsed_dates.isna().any():
-        raise ValueError("Cannot compute recency weights: invalid dates detected.")
-
-    age_days = (parsed_dates.max() - parsed_dates).dt.days.astype(float)
-    return (0.5 ** (age_days / float(half_life_days))).to_numpy()
-
-
 def _rank_scores_descending(scores: list[float]) -> list[int]:
     """
     Rank scores where larger is better, matching GridSearchCV's rank semantics.
@@ -209,7 +195,7 @@ def tune_logistic_baseline(train_df: pd.DataFrame, config: LogisticConfig | None
             fold_y_train = y_train.iloc[fold_train_idx]
             fold_X_val = X_train.iloc[fold_val_idx]
             fold_y_val = y_train.iloc[fold_val_idx]
-            fold_weight = _compute_recency_weights_from_dates(
+            fold_weight = compute_recency_weights_from_dates(
                 train_df.iloc[fold_train_idx][date_col],
                 half_life_days=half_life_days,
             )

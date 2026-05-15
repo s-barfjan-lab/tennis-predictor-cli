@@ -518,7 +518,7 @@ def train_tuned_xgb_for_tour(project_root: Path, tour: str, source: str = "sackm
 
     search = tune_xgb_classifier(X_train=X_train, y_train=y_train, sample_weight=train_sample_weight, n_splits=5,
         refit_metric="neg_log_loss", random_state=random_state, search_profile=search_profile,
-        surface_specific=surface_specific, )
+        surface_specific=surface_specific, train_dates=train_inner_df["tourney_date"], half_life_days=half_life_days, )
     
 
     tuned_config = xgb_config_from_gridsearch_best_params(search.best_params_, random_state=random_state, )

@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from time import perf_counter
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import xgboost as xgb
+from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, log_loss, roc_auc_score
 
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import ParameterGrid
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
+from tennis_cli.models._recency import compute_recency_weights_from_dates
 from tennis_cli.models.dataset import get_categorical_feature_columns, get_numeric_feature_columns
 from tennis_cli.models.split import build_inner_time_series_cv
 
@@ -33,6 +38,22 @@ class XGBConfig:
     early_stopping_rounds: int = 50
     eval_metric: str = "logloss"
     tree_method: str = "hist"
+
+
+@dataclass
+class XGBCVSearchResult:
+    """
+    Small GridSearchCV-compatible result object for XGBoost tuning.
+
+    GridSearchCV cannot recompute recency sample weights separately for each
+    fold, so the manual search below keeps the attributes used by the training
+    pipeline while anchoring fold weights to each fold's training max date.
+    """
+
+    best_estimator_: Pipeline
+    best_params_: dict[str, Any]
+    best_score_: float
+    cv_results_: dict[str, Any]
 
 
 
@@ -178,24 +199,136 @@ def fit_xgb_classifier(X_train: pd.DataFrame, y_train: pd.Series, X_val: pd.Data
 
 
 
+def _rank_scores_descending(scores: list[float]) -> list[int]:
+    """
+    Rank scores where larger is better, matching GridSearchCV's rank semantics.
+    """
+    order = np.argsort([-score for score in scores])
+    ranks = [0] * len(scores)
+    for rank, idx in enumerate(order, start=1):
+        ranks[int(idx)] = rank
+    return ranks
+
+
 def tune_xgb_classifier(X_train: pd.DataFrame, y_train: pd.Series, sample_weight: pd.Series | None = None, n_splits: int = 3,
     refit_metric: str = "neg_log_loss", random_state: int = 42, search_profile: str = "base",
-    surface_specific: bool = False, ) -> GridSearchCV:
+    surface_specific: bool = False, train_dates: pd.Series | None = None, half_life_days: int = 730, ) -> XGBCVSearchResult:
     """
     Tune XGBoost using inner time-series CV on the training split only.
+
+    Recency weights are recomputed per fold and anchored to that fold's
+    training max date. No early stopping is used inside CV; each candidate uses
+    its fixed ``model__n_estimators`` value from the parameter grid.
     """
+    if refit_metric != "neg_log_loss":
+        raise ValueError("Manual XGBoost CV currently supports refit_metric='neg_log_loss' only")
+
+    if train_dates is None:
+        raise ValueError("train_dates is required for fold-anchored recency weights.")
+
+    if len(train_dates) != len(X_train):
+        raise ValueError("train_dates must have the same length as X_train.")
+
     pipeline = build_xgb_search_pipeline(random_state=random_state, surface_specific=surface_specific)
     cv = build_inner_time_series_cv(n_splits=n_splits, n_samples=len(X_train))
+    param_candidates = list(ParameterGrid(get_xgb_param_grid(search_profile=search_profile)))
+    fold_splits = list(cv.split(X_train, y_train))
 
-    search = GridSearchCV(estimator=pipeline, param_grid=get_xgb_param_grid(search_profile=search_profile),
-        scoring={"neg_log_loss": "neg_log_loss", "roc_auc": "roc_auc", "accuracy": "accuracy", }, refit=refit_metric,
-        cv=cv, n_jobs=-1, verbose=1, )
+    results: list[dict[str, Any]] = []
+    for params in param_candidates:
+        split_neg_log_loss: list[float] = []
+        split_roc_auc: list[float] = []
+        split_accuracy: list[float] = []
+        fit_times: list[float] = []
+        score_times: list[float] = []
 
-    fit_kwargs = {}
+        for fold_train_idx, fold_val_idx in fold_splits:
+            fold_pipeline = clone(pipeline).set_params(**params)
+            fold_X_train = X_train.iloc[fold_train_idx]
+            fold_y_train = y_train.iloc[fold_train_idx]
+            fold_X_val = X_train.iloc[fold_val_idx]
+            fold_y_val = y_train.iloc[fold_val_idx]
+            fold_weight = compute_recency_weights_from_dates(
+                train_dates.iloc[fold_train_idx],
+                half_life_days=half_life_days,
+            )
+
+            fit_start = perf_counter()
+            fold_pipeline.fit(fold_X_train, fold_y_train, model__sample_weight=fold_weight)
+            fit_times.append(perf_counter() - fit_start)
+
+            score_start = perf_counter()
+            val_prob = fold_pipeline.predict_proba(fold_X_val)[:, 1]
+            val_pred = (val_prob >= 0.5).astype(int)
+            split_neg_log_loss.append(-log_loss(fold_y_val, val_prob, labels=[0, 1]))
+            split_accuracy.append(accuracy_score(fold_y_val, val_pred))
+            try:
+                split_roc_auc.append(roc_auc_score(fold_y_val, val_prob))
+            except ValueError:
+                split_roc_auc.append(np.nan)
+            score_times.append(perf_counter() - score_start)
+
+        results.append({
+            "params": params,
+            "mean_fit_time": float(np.mean(fit_times)),
+            "std_fit_time": float(np.std(fit_times)),
+            "mean_score_time": float(np.mean(score_times)),
+            "std_score_time": float(np.std(score_times)),
+            "mean_test_neg_log_loss": float(np.mean(split_neg_log_loss)),
+            "std_test_neg_log_loss": float(np.std(split_neg_log_loss)),
+            "mean_test_accuracy": float(np.mean(split_accuracy)),
+            "std_test_accuracy": float(np.std(split_accuracy)),
+            "mean_test_roc_auc": float(np.nanmean(split_roc_auc)),
+            "std_test_roc_auc": float(np.nanstd(split_roc_auc)),
+            "split_test_neg_log_loss": split_neg_log_loss,
+            "split_test_accuracy": split_accuracy,
+            "split_test_roc_auc": split_roc_auc,
+        })
+
+    best_idx = int(np.argmax([row["mean_test_neg_log_loss"] for row in results]))
+    best_params = results[best_idx]["params"]
+    best_pipeline = clone(pipeline).set_params(**best_params)
+
+    final_fit_kwargs = {}
     if sample_weight is not None:
-        fit_kwargs["model__sample_weight"] = sample_weight.to_numpy()
+        final_fit_kwargs["model__sample_weight"] = sample_weight.to_numpy()
 
-    search.fit(X_train, y_train, **fit_kwargs)
+    best_pipeline.fit(X_train, y_train, **final_fit_kwargs)
+
+    cv_results: dict[str, Any] = {
+        "params": [row["params"] for row in results],
+        "mean_fit_time": [row["mean_fit_time"] for row in results],
+        "std_fit_time": [row["std_fit_time"] for row in results],
+        "mean_score_time": [row["mean_score_time"] for row in results],
+        "std_score_time": [row["std_score_time"] for row in results],
+        "mean_test_neg_log_loss": [row["mean_test_neg_log_loss"] for row in results],
+        "std_test_neg_log_loss": [row["std_test_neg_log_loss"] for row in results],
+        "rank_test_neg_log_loss": _rank_scores_descending([row["mean_test_neg_log_loss"] for row in results]),
+        "mean_test_accuracy": [row["mean_test_accuracy"] for row in results],
+        "std_test_accuracy": [row["std_test_accuracy"] for row in results],
+        "mean_test_roc_auc": [row["mean_test_roc_auc"] for row in results],
+        "std_test_roc_auc": [row["std_test_roc_auc"] for row in results],
+    }
+    for param_name in sorted(best_params):
+        cv_results[f"param_{param_name}"] = [row["params"][param_name] for row in results]
+
+    for split_idx in range(n_splits):
+        cv_results[f"split{split_idx}_test_neg_log_loss"] = [
+            row["split_test_neg_log_loss"][split_idx] for row in results
+        ]
+        cv_results[f"split{split_idx}_test_accuracy"] = [
+            row["split_test_accuracy"][split_idx] for row in results
+        ]
+        cv_results[f"split{split_idx}_test_roc_auc"] = [
+            row["split_test_roc_auc"][split_idx] for row in results
+        ]
+
+    search = XGBCVSearchResult(
+        best_estimator_=best_pipeline,
+        best_params_=best_params,
+        best_score_=float(results[best_idx]["mean_test_neg_log_loss"]),
+        cv_results_=cv_results,
+    )
     return search
 
 
