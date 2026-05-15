@@ -68,6 +68,26 @@ def chronological_train_val_test_split(df: pd.DataFrame, config: TimeSplitConfig
     return train_df, val_df, test_df
 
 
+def split_train_into_train_and_calibration(
+    train_df: pd.DataFrame,
+    date_col: str = "tourney_date",
+    calibration_days: int = 90,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Carve the last `calibration_days` of the training partition into a separate
+    calibration set, used for early stopping and post-hoc calibrator fitting.
+    The remaining earlier portion is the new inner-train set.
+    """
+    train_df = train_df.copy()
+    train_df[date_col] = pd.to_datetime(train_df[date_col])
+    cutoff = train_df[date_col].max() - pd.Timedelta(days=calibration_days)
+    train_inner = train_df[train_df[date_col] <= cutoff].copy()
+    calib = train_df[train_df[date_col] > cutoff].copy()
+    if len(train_inner) == 0 or len(calib) == 0:
+        raise ValueError("Empty split when carving calibration set; lower calibration_days.")
+    return train_inner, calib
+
+
 def summarize_split(df: pd.DataFrame, split_name: str) -> dict:
     """
     Return a compact summary for one split.

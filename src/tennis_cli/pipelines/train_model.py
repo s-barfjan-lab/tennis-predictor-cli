@@ -10,7 +10,11 @@ from tennis_cli.models.evaluate import (evaluate_multiple_splits, evaluate_predi
 from tennis_cli.models.io import (save_dataframe_csv, save_metadata_json, save_metrics_json, save_model_artifact, )
 from tennis_cli.models.logistic import (LogisticConfig, extract_logistic_coefficients, fit_logistic_baseline, predict_split,
     tune_logistic_baseline, )
-from tennis_cli.models.split import (chronological_train_val_test_split, summarize_all_splits, )
+from tennis_cli.models.split import (
+    chronological_train_val_test_split,
+    split_train_into_train_and_calibration,
+    summarize_all_splits,
+)
 from tennis_cli.models.xgboost_model import (XGBConfig, apply_isotonic_calibration, apply_sigmoid_calibration,
     feature_importance_from_xgb_artifact, fit_isotonic_calibrator, fit_sigmoid_calibrator, fit_xgb_classifier,
     predict_proba_from_xgb_artifact, tune_xgb_classifier, xgb_config_from_gridsearch_best_params, )
@@ -142,23 +146,18 @@ def _choose_xgb_calibration(
     sigmoid_test_metrics: dict,
     isotonic_val_metrics: dict,
     isotonic_test_metrics: dict,
-    min_isotonic_rows: int = 1000,
 ) -> tuple[str | None, dict, dict, dict]:
     """
     Pick the calibration method using validation log-loss.
 
-    Isotonic calibration is intentionally disabled on small validation sets
-    because it can overfit badly by creating stepwise extreme probabilities.
     Raw probabilities are a valid candidate because XGBoost's logistic output
     is often already better calibrated than a noisy post-hoc calibrator.
     """
     candidates = [
         (None, raw_val_metrics, raw_test_metrics),
+        ("isotonic", isotonic_val_metrics, isotonic_test_metrics),
         ("sigmoid", sigmoid_val_metrics, sigmoid_test_metrics),
     ]
-
-    if int(raw_val_metrics["rows"]) >= min_isotonic_rows:
-        candidates.append(("isotonic", isotonic_val_metrics, isotonic_test_metrics))
 
     chosen_method, chosen_val, chosen_test = min(
         candidates,
@@ -169,8 +168,7 @@ def _choose_xgb_calibration(
         "selection_metric": "validation_log_loss",
         "raw_eligible": True,
         "sigmoid_eligible": True,
-        "isotonic_eligible": int(raw_val_metrics["rows"]) >= min_isotonic_rows,
-        "min_isotonic_rows": int(min_isotonic_rows),
+        "isotonic_eligible": True,
     }
     return chosen_method, chosen_val, chosen_test, policy
 
@@ -501,12 +499,16 @@ def train_tuned_xgb_for_tour(project_root: Path, tour: str, source: str = "sackm
 
     train_df, val_df, test_df = chronological_train_val_test_split(df)
     split_summary = summarize_all_splits(train_df, val_df, test_df)
-    train_sample_weight = _compute_recency_sample_weights(train_df, half_life_days=half_life_days,)
+    train_inner_df, calibration_df = split_train_into_train_and_calibration(train_df, calibration_days=90)
+    train_sample_weight = _compute_recency_sample_weights(train_inner_df, half_life_days=half_life_days,)
 
     feature_columns = get_feature_columns(surface_specific=surface_specific)
 
-    X_train = train_df[feature_columns].copy()
-    y_train = train_df[TARGET_COLUMN].copy()
+    X_train = train_inner_df[feature_columns].copy()
+    y_train = train_inner_df[TARGET_COLUMN].copy()
+
+    X_calib = calibration_df[feature_columns].copy()
+    y_calib = calibration_df[TARGET_COLUMN].copy()
 
     X_val = val_df[feature_columns].copy()
     y_val = val_df[TARGET_COLUMN].copy()
@@ -521,23 +523,24 @@ def train_tuned_xgb_for_tour(project_root: Path, tour: str, source: str = "sackm
 
     tuned_config = xgb_config_from_gridsearch_best_params(search.best_params_, random_state=random_state, )
 
-    artifact = fit_xgb_classifier(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, feature_columns=feature_columns,
+    artifact = fit_xgb_classifier(X_train=X_train, y_train=y_train, X_val=X_calib, y_val=y_calib, feature_columns=feature_columns,
         config=tuned_config, sample_weight=train_sample_weight, surface_specific=surface_specific, )
 
+    raw_calib_pred_prob = predict_proba_from_xgb_artifact(artifact, X_calib)
     raw_val_pred_prob = predict_proba_from_xgb_artifact(artifact, X_val)
     raw_test_pred_prob = predict_proba_from_xgb_artifact(artifact, X_test)
 
     raw_val_metrics = _compute_binary_metrics(y_val, raw_val_pred_prob, "validation_raw")
     raw_test_metrics = _compute_binary_metrics(y_test, raw_test_pred_prob, "test_raw")
 
-    isotonic_artifact = fit_isotonic_calibrator(pred_prob=raw_val_pred_prob, y_true=y_val, )
+    isotonic_artifact = fit_isotonic_calibrator(pred_prob=raw_calib_pred_prob, y_true=y_calib, )
     isotonic_val_pred_prob = apply_isotonic_calibration(isotonic_artifact, raw_val_pred_prob)
     isotonic_test_pred_prob = apply_isotonic_calibration(isotonic_artifact, raw_test_pred_prob)
 
     isotonic_val_metrics = _compute_binary_metrics(y_val, isotonic_val_pred_prob, "validation_isotonic", )
     isotonic_test_metrics = _compute_binary_metrics(y_test, isotonic_test_pred_prob, "test_isotonic", )
 
-    sigmoid_artifact = fit_sigmoid_calibrator(pred_prob=raw_val_pred_prob, y_true=y_val, )
+    sigmoid_artifact = fit_sigmoid_calibrator(pred_prob=raw_calib_pred_prob, y_true=y_calib, )
     sigmoid_val_pred_prob = apply_sigmoid_calibration(sigmoid_artifact, raw_val_pred_prob)
     sigmoid_test_pred_prob = apply_sigmoid_calibration(sigmoid_artifact, raw_test_pred_prob)
 
@@ -612,10 +615,16 @@ def train_tuned_xgb_for_tour(project_root: Path, tour: str, source: str = "sackm
         "feature_columns": feature_columns,
         "target_column": TARGET_COLUMN,
         "train_rows": int(len(train_df)),
+        "train_inner_rows": int(len(train_inner_df)),
+        "calibration_rows": int(len(calibration_df)),
         "validation_rows": int(len(val_df)),
         "test_rows": int(len(test_df)),
         "train_date_min": str(train_df["tourney_date"].min().date()),
         "train_date_max": str(train_df["tourney_date"].max().date()),
+        "train_inner_date_min": str(train_inner_df["tourney_date"].min().date()),
+        "train_inner_date_max": str(train_inner_df["tourney_date"].max().date()),
+        "calibration_date_min": str(calibration_df["tourney_date"].min().date()),
+        "calibration_date_max": str(calibration_df["tourney_date"].max().date()),
         "validation_date_min": str(val_df["tourney_date"].min().date()),
         "validation_date_max": str(val_df["tourney_date"].max().date()),
         "test_date_min": str(test_df["tourney_date"].min().date()),
@@ -634,7 +643,7 @@ def train_tuned_xgb_for_tour(project_root: Path, tour: str, source: str = "sackm
         "available_calibrations": ["isotonic", "sigmoid"],
         "chosen_calibration_method": chosen_calibration_method,
         "calibration_selection_policy": calibration_selection_policy,
-        "calibration_fit_split": "validation",
+        "calibration_fit_split": "training_tail_90_days",
         "random_state": random_state,
         "artifact_tag": artifact_tag, }
     save_metadata_json(metadata, metadata_path)
@@ -684,12 +693,16 @@ def train_xgb_for_tour(project_root: Path, tour: str, source: str = "sackmann", 
 
     train_df, val_df, test_df = chronological_train_val_test_split(df)
     split_summary = summarize_all_splits(train_df, val_df, test_df)
-    train_sample_weight = _compute_recency_sample_weights(train_df, half_life_days=half_life_days,)
+    train_inner_df, calibration_df = split_train_into_train_and_calibration(train_df, calibration_days=90)
+    train_sample_weight = _compute_recency_sample_weights(train_inner_df, half_life_days=half_life_days,)
 
     feature_columns = get_feature_columns(surface_specific=surface_specific)
 
-    X_train = train_df[feature_columns].copy()
-    y_train = train_df[TARGET_COLUMN].copy()
+    X_train = train_inner_df[feature_columns].copy()
+    y_train = train_inner_df[TARGET_COLUMN].copy()
+
+    X_calib = calibration_df[feature_columns].copy()
+    y_calib = calibration_df[TARGET_COLUMN].copy()
 
     X_val = val_df[feature_columns].copy()
     y_val = val_df[TARGET_COLUMN].copy()
@@ -699,24 +712,25 @@ def train_xgb_for_tour(project_root: Path, tour: str, source: str = "sackmann", 
 
 
     config = XGBConfig(random_state=random_state)
-    artifact = fit_xgb_classifier(X_train=X_train, y_train=y_train, X_val=X_val, y_val=y_val, feature_columns=feature_columns,
+    artifact = fit_xgb_classifier(X_train=X_train, y_train=y_train, X_val=X_calib, y_val=y_calib, feature_columns=feature_columns,
          config=config, sample_weight=train_sample_weight, surface_specific=surface_specific, )
 
 
+    raw_calib_pred_prob = predict_proba_from_xgb_artifact(artifact, X_calib)
     raw_val_pred_prob = predict_proba_from_xgb_artifact(artifact, X_val)
     raw_test_pred_prob = predict_proba_from_xgb_artifact(artifact, X_test)
 
     raw_val_metrics = _compute_binary_metrics(y_val, raw_val_pred_prob, "validation_raw")
     raw_test_metrics = _compute_binary_metrics(y_test, raw_test_pred_prob, "test_raw")
 
-    isotonic_artifact = fit_isotonic_calibrator(pred_prob=raw_val_pred_prob, y_true=y_val, )
+    isotonic_artifact = fit_isotonic_calibrator(pred_prob=raw_calib_pred_prob, y_true=y_calib, )
     isotonic_val_pred_prob = apply_isotonic_calibration(isotonic_artifact, raw_val_pred_prob, )
     isotonic_test_pred_prob = apply_isotonic_calibration(isotonic_artifact, raw_test_pred_prob, )
 
     isotonic_val_metrics = _compute_binary_metrics(y_val, isotonic_val_pred_prob, "validation_isotonic", )
     isotonic_test_metrics = _compute_binary_metrics(y_test, isotonic_test_pred_prob, "test_isotonic",)
 
-    sigmoid_artifact = fit_sigmoid_calibrator(pred_prob=raw_val_pred_prob, y_true=y_val, )
+    sigmoid_artifact = fit_sigmoid_calibrator(pred_prob=raw_calib_pred_prob, y_true=y_calib, )
     sigmoid_val_pred_prob = apply_sigmoid_calibration(sigmoid_artifact, raw_val_pred_prob, )
     sigmoid_test_pred_prob = apply_sigmoid_calibration(sigmoid_artifact, raw_test_pred_prob, )
 
@@ -790,10 +804,16 @@ def train_xgb_for_tour(project_root: Path, tour: str, source: str = "sackmann", 
         "feature_columns": feature_columns,
         "target_column": TARGET_COLUMN,
         "train_rows": int(len(train_df)),
+        "train_inner_rows": int(len(train_inner_df)),
+        "calibration_rows": int(len(calibration_df)),
         "validation_rows": int(len(val_df)),
         "test_rows": int(len(test_df)),
         "train_date_min": str(train_df["tourney_date"].min().date()),
         "train_date_max": str(train_df["tourney_date"].max().date()),
+        "train_inner_date_min": str(train_inner_df["tourney_date"].min().date()),
+        "train_inner_date_max": str(train_inner_df["tourney_date"].max().date()),
+        "calibration_date_min": str(calibration_df["tourney_date"].min().date()),
+        "calibration_date_max": str(calibration_df["tourney_date"].max().date()),
         "validation_date_min": str(val_df["tourney_date"].min().date()),
         "validation_date_max": str(val_df["tourney_date"].max().date()),
         "test_date_min": str(test_df["tourney_date"].min().date()),
@@ -806,7 +826,7 @@ def train_xgb_for_tour(project_root: Path, tour: str, source: str = "sackmann", 
         "available_calibrations": ["isotonic", "sigmoid"],
         "chosen_calibration_method": chosen_calibration_method,
         "calibration_selection_policy": calibration_selection_policy,
-        "calibration_fit_split": "validation",
+        "calibration_fit_split": "training_tail_90_days",
         "random_state": random_state,
         "artifact_tag": artifact_tag, }
     save_metadata_json(metadata, metadata_path)
