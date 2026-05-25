@@ -1,0 +1,10 @@
+tour,source,surface,branch,any_model_improves_by_noise,any_model_regresses_by_noise,improving_rows,regressing_rows
+atp,sackmann,Clay,atp/sackmann/Clay,True,False,2,0
+atp,sackmann,Grass,atp/sackmann/Grass,True,False,1,0
+atp,sackmann,Hard,atp/sackmann/Hard,False,True,0,1
+atp,tml,Clay,atp/tml/Clay,True,False,1,0
+atp,tml,Grass,atp/tml/Grass,True,False,2,0
+atp,tml,Hard,atp/tml/Hard,False,True,0,1
+wta,sackmann,Clay,wta/sackmann/Clay,True,False,1,0
+wta,sackmann,Grass,wta/sackmann/Grass,False,True,0,1
+wta,sackmann,Hard,wta/sackmann/Hard,False,True,0,1

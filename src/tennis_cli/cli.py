@@ -11,6 +11,9 @@ from .pipelines.build_features import (build_long_view_artifact, build_baseline_
 from .pipelines.train_model import (train_logistic_for_tour, train_tuned_logistic_for_tour, train_xgb_for_tour, )
 from .pipelines.train_model import (train_logistic_for_tour, train_tuned_logistic_for_tour, train_xgb_for_tour, train_tuned_xgb_for_tour, )
 from .pipelines.predict_match import predict_match_for_tour
+from .pipelines.predict_inplay import predict_inplay_for_match
+from .pipelines.update_tennis_abstract_pbp import update_tennis_abstract_pbp_repo
+from .pipelines.build_tennis_abstract_pbp import build_tennis_abstract_pbp_artifacts
 
 from tennis_cli.pipelines.update_tml import update_tml_repo
 from tennis_cli.pipelines.inspect_tml import inspect_tml_repo
@@ -133,6 +136,7 @@ def predict_match_cmd(
     tourney_level: str = typer.Option(None, "--tourney-level", help="Tournament level, e.g. G, M, A, C"),
     source: str = typer.Option("sackmann", "--source", help="Source: sackmann or tml"),
     model: str = typer.Option("logit", "--model", help="Model type: logit or xgb"),
+    model_variant: str = typer.Option("baseline", "--model-variant", help="Model variant: baseline or tuned"),
 ):
     """
     Predict match winner probability for two players on a given date.
@@ -140,6 +144,7 @@ def predict_match_cmd(
     tour = tour.lower().strip()
     source = source.lower().strip()
     model = model.lower().strip()
+    model_variant = model_variant.lower().strip()
 
     if tour not in {"atp", "wta"}:
         raise typer.BadParameter("tour must be 'atp' or 'wta'")
@@ -149,6 +154,9 @@ def predict_match_cmd(
 
     if model not in {"logit", "xgb"}:
         raise typer.BadParameter("model must be either 'logit' or 'xgb'")
+
+    if model_variant not in {"baseline", "tuned"}:
+        raise typer.BadParameter("model-variant must be either 'baseline' or 'tuned'")
 
     if source == "tml" and tour != "atp":
         raise typer.BadParameter("TML source is currently supported only for ATP")
@@ -166,11 +174,13 @@ def predict_match_cmd(
         tourney_level=tourney_level,
         source=source,
         model=model,
+        model_variant=model_variant,
     )
 
     console.print(f"[bold green]Prediction completed for[/] {tour.upper()}")
     console.print(f"[bold]Source:[/] {result['source']}")
     console.print(f"[bold]Model:[/] {result['model']}")
+    console.print(f"[bold]Model variant:[/] {result['model_variant']}")
     if result["model"] == "xgb":
         console.print(f"[bold]Chosen calibration:[/] {result['chosen_calibration_method']}")
     console.print(f"[bold]Date:[/] {result['match_date']}")
@@ -210,6 +220,62 @@ def predict_match_cmd(
     console.print(f"delta_surface_elo: {snapshot.get('delta_surface_elo')}")
     console.print(f"delta_h2h: {snapshot.get('delta_h2h')}")
     console.print(f"round_ordinal: {snapshot.get('round_ordinal')}")
+
+
+@app.command("predict-inplay")
+def predict_inplay_cmd(
+    sets_a: int = typer.Option(..., "--sets-a", help="Sets won by player A at prediction time"),
+    sets_b: int = typer.Option(..., "--sets-b", help="Sets won by player B at prediction time"),
+    games_a: int = typer.Option(..., "--games-a", help="Games won by player A in the current set"),
+    games_b: int = typer.Option(..., "--games-b", help="Games won by player B in the current set"),
+    points_a: str = typer.Option("0", "--points-a", help="Current point score for A: 0, 15, 30, 40, AD, or tiebreak points"),
+    points_b: str = typer.Option("0", "--points-b", help="Current point score for B: 0, 15, 30, 40, AD, or tiebreak points"),
+    server: str = typer.Option(..., "--server", help="Current point server: A or B"),
+    p_a_serve_point: float = typer.Option(0.5, "--p-a-serve-point", help="Pre-match prior probability that A wins a point on serve"),
+    p_b_serve_point: float = typer.Option(0.5, "--p-b-serve-point", help="Pre-match prior probability that B wins a point on serve"),
+    best_of: int = typer.Option(3, "--best-of", help="Best-of format: 3 or 5"),
+    a_service_points_won: int = typer.Option(0, "--a-service-points-won", help="A service points won so far in this match"),
+    a_service_points_played: int = typer.Option(0, "--a-service-points-played", help="A service points played so far in this match"),
+    b_service_points_won: int = typer.Option(0, "--b-service-points-won", help="B service points won so far in this match"),
+    b_service_points_played: int = typer.Option(0, "--b-service-points-played", help="B service points played so far in this match"),
+    prior_strength: float = typer.Option(48.0, "--prior-strength", help="Pseudo-service-points used to shrink live point rates toward the prior"),
+):
+    """
+    Predict live match probability from current score state.
+    """
+    server = server.upper().strip()
+    if server not in {"A", "B"}:
+        raise typer.BadParameter("server must be either 'A' or 'B'")
+    if best_of not in {3, 5}:
+        raise typer.BadParameter("best-of must be either 3 or 5")
+
+    result = predict_inplay_for_match(
+        sets_a=sets_a,
+        sets_b=sets_b,
+        games_a=games_a,
+        games_b=games_b,
+        points_a=points_a,
+        points_b=points_b,
+        server=server,
+        p_a_serve_point_prior=p_a_serve_point,
+        p_b_serve_point_prior=p_b_serve_point,
+        best_of=best_of,
+        a_service_points_won=a_service_points_won,
+        a_service_points_played=a_service_points_played,
+        b_service_points_won=b_service_points_won,
+        b_service_points_played=b_service_points_played,
+        prior_strength=prior_strength,
+    )
+
+    console.print("[bold green]In-play Markov prediction completed[/]")
+    console.print(f"[bold]Score:[/] sets {sets_a}-{sets_b}, games {games_a}-{games_b}, points {points_a}-{points_b}")
+    console.print(f"[bold]Server:[/] {server}")
+    console.print(f"[bold]Best of:[/] {best_of}")
+    console.print(f"[bold]A serve-point prior/live:[/] {p_a_serve_point:.4f} -> {result['p_a_serve_point_live']:.4f}")
+    console.print(f"[bold]B serve-point prior/live:[/] {p_b_serve_point:.4f} -> {result['p_b_serve_point_live']:.4f}")
+    console.print("")
+    console.print(f"[bold cyan]Player A win probability:[/] {result['prob_player_a_win']:.4f}")
+    console.print(f"[bold cyan]Player B win probability:[/] {result['prob_player_b_win']:.4f}")
 
 
 
@@ -322,3 +388,47 @@ def inspect_tml() -> None:
 def build_tml_dataset_command() -> None:
     paths = get_paths()
     build_tml_dataset(paths)
+
+
+@app.command("update-tennis-abstract-pbp")
+def update_tennis_abstract_pbp_command() -> None:
+    """
+    Clone/update Tennis Abstract Match Charting point-by-point data separately.
+    """
+    paths = get_paths()
+    repo_dir = update_tennis_abstract_pbp_repo(paths)
+    typer.echo(f"Tennis Abstract PBP repo ready: {repo_dir}")
+
+
+@app.command("build-tennis-abstract-pbp")
+def build_tennis_abstract_pbp_command(
+    tour: str = typer.Option("both", "--tour", help="Tour to build: atp, wta, or both"),
+    start_year: int = typer.Option(2015, "--start-year", help="First match year to keep"),
+    end_year: int = typer.Option(2025, "--end-year", help="Last match year to keep"),
+) -> None:
+    """
+    Build isolated Tennis Abstract point-by-point in-play snapshots.
+    """
+    tour = tour.lower().strip()
+    if tour == "both":
+        tours = ("atp", "wta")
+    elif tour in {"atp", "wta"}:
+        tours = (tour,)
+    else:
+        raise typer.BadParameter("tour must be one of: atp, wta, both")
+
+    if start_year > end_year:
+        raise typer.BadParameter("start-year must be <= end-year")
+
+    paths = get_paths()
+    artifacts = build_tennis_abstract_pbp_artifacts(
+        paths=paths,
+        tours=tours,
+        start_year=start_year,
+        end_year=end_year,
+    )
+    console.print("[bold green]Tennis Abstract PBP artifacts built separately[/]")
+    console.print(f"[bold]Rows:[/] {artifacts.rows:,}")
+    console.print(f"[bold]Matches:[/] {artifacts.matches:,}")
+    console.print(f"[bold green]Processed points:[/] {artifacts.processed_points_path}")
+    console.print(f"[bold green]Feature snapshots:[/] {artifacts.feature_snapshots_path}")

@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import json
 
+from tennis_cli.features.markov import add_markov_match_features
 from tennis_cli.models.dataset import get_feature_columns
 from tennis_cli.models.io import load_model_artifact
 from tennis_cli.models.xgboost_model import (apply_calibration, predict_proba_from_xgb_artifact, )
@@ -356,6 +357,17 @@ def _current_win_streak_from_history(hist: pd.DataFrame) -> int:
     return streak
 
 
+def _prior_mean_with_history_indicator(hist: pd.DataFrame, col: str, window: int = 30, min_periods: int = 10) -> tuple:
+    if col not in hist.columns:
+        return pd.NA, 0
+
+    values = pd.to_numeric(hist[col].tail(window), errors="coerce").dropna()
+    if len(values) < min_periods:
+        return pd.NA, 0
+
+    return float(values.mean()), 1
+
+
 def _build_player_state(
     long_df: pd.DataFrame,
     resolved: ResolvedPlayer,
@@ -383,6 +395,7 @@ def _build_player_state(
         if match_surface is not None
         else hist.iloc[0:0].copy())
     recent10_surface = surface_hist.tail(10)
+    has_surface_history = int(len(surface_hist) >= 5)
     last_7_start = as_of_date - pd.Timedelta(days=7)
     last_30_start = as_of_date - pd.Timedelta(days=30)
     recent7 = hist[hist["tourney_date"] >= last_7_start]
@@ -412,6 +425,19 @@ def _build_player_state(
     return_win_pct_last10 = (recent10["return_points_won_pct"].mean()
         if "return_points_won_pct" in recent10.columns and len(recent10) > 0
         else latest.get("return_win_pct_last10", pd.NA))
+
+    service_points_won_pct_30, has_serve_history = _prior_mean_with_history_indicator(
+        hist,
+        "service_points_won_pct",
+        window=30,
+        min_periods=10,
+    )
+    return_points_won_pct_30, has_return_history = _prior_mean_with_history_indicator(
+        hist,
+        "return_points_won_pct",
+        window=30,
+        min_periods=10,
+    )
 
     bp_conversion_last10 = (recent10["bp_conversion_pct"].mean()
         if "bp_conversion_pct" in recent10.columns and len(recent10) > 0
@@ -448,24 +474,31 @@ def _build_player_state(
         second_serve_won_per_service_game_last10 = latest.get("second_serve_won_per_service_game_last10", pd.NA)
     
     serve_win_pct_last10_surface = (recent10_surface["service_points_won_pct"].mean()
-        if "service_points_won_pct" in recent10_surface.columns and len(recent10_surface) > 0
+        if "service_points_won_pct" in recent10_surface.columns and has_surface_history
         else latest.get("serve_win_pct_last10_surface", pd.NA))
 
     return_win_pct_last10_surface = (recent10_surface["return_points_won_pct"].mean()
-        if "return_points_won_pct" in recent10_surface.columns and len(recent10_surface) > 0
+        if "return_points_won_pct" in recent10_surface.columns and has_surface_history
         else latest.get("return_win_pct_last10_surface", pd.NA))
 
     bp_conversion_last10_surface = (recent10_surface["bp_conversion_pct"].mean()
-        if "bp_conversion_pct" in recent10_surface.columns and len(recent10_surface) > 0
+        if "bp_conversion_pct" in recent10_surface.columns and has_surface_history
         else latest.get("bp_conversion_last10_surface", pd.NA))
 
     bp_saved_pct_last10_surface = (recent10_surface["bp_saved_pct"].mean()
-        if "bp_saved_pct" in recent10_surface.columns and len(recent10_surface) > 0
+        if "bp_saved_pct" in recent10_surface.columns and has_surface_history
         else latest.get("bp_saved_pct_last10_surface", pd.NA))
 
     surface_win_pct_last10 = (recent10_surface["label_win"].mean()
-        if len(recent10_surface) > 0
+        if has_surface_history
         else latest.get("surface_win_pct_last10", pd.NA))
+
+    if not has_surface_history:
+        serve_win_pct_last10_surface = pd.NA
+        return_win_pct_last10_surface = pd.NA
+        bp_conversion_last10_surface = pd.NA
+        bp_saved_pct_last10_surface = pd.NA
+        surface_win_pct_last10 = pd.NA
 
     if len(surface_hist) > 0:
         last_surface_match_date = surface_hist.iloc[-1]["tourney_date"]
@@ -518,12 +551,17 @@ def _build_player_state(
         "second_serve_won_per_service_game_last10": second_serve_won_per_service_game_last10,
         "serve_win_pct_last10": serve_win_pct_last10,
         "return_win_pct_last10": return_win_pct_last10,
+        "service_points_won_pct_30": service_points_won_pct_30,
+        "return_points_won_pct_30": return_points_won_pct_30,
+        "has_serve_history": has_serve_history,
+        "has_return_history": has_return_history,
         "bp_conversion_last10": bp_conversion_last10,
         "bp_saved_pct_last10": bp_saved_pct_last10,
         "days_since_last_match": days_since_last_match,
         "matches_last_7_days": int(len(recent7)),
         "matches_last_30_days": int(len(recent30)),
         "matches_last_365_days": int(len(recent365)),
+        "has_surface_history": has_surface_history,
         "surface_win_pct_last10": surface_win_pct_last10,
         "serve_win_pct_last10_surface": serve_win_pct_last10_surface,
         "return_win_pct_last10_surface": return_win_pct_last10_surface,
@@ -597,12 +635,21 @@ def _build_baseline_row(state_a: dict, state_b: dict, tour: str, as_of_date: pd.
         ),
         "delta_serve_win_pct_last10": state_a["serve_win_pct_last10"] - state_b["serve_win_pct_last10"],
         "delta_return_win_pct_last10": state_a["return_win_pct_last10"] - state_b["return_win_pct_last10"],
+        "service_points_won_pct_30_a": state_a["service_points_won_pct_30"],
+        "service_points_won_pct_30_b": state_b["service_points_won_pct_30"],
+        "return_points_won_pct_30_a": state_a["return_points_won_pct_30"],
+        "return_points_won_pct_30_b": state_b["return_points_won_pct_30"],
+        "has_serve_history_a": state_a["has_serve_history"],
+        "has_serve_history_b": state_b["has_serve_history"],
+        "has_return_history_a": state_a["has_return_history"],
+        "has_return_history_b": state_b["has_return_history"],
         "delta_bp_conversion_last10": state_a["bp_conversion_last10"] - state_b["bp_conversion_last10"],
         "delta_bp_saved_pct_last10": state_a["bp_saved_pct_last10"] - state_b["bp_saved_pct_last10"],
         "delta_days_since_last_match": state_a["days_since_last_match"] - state_b["days_since_last_match"],
         "delta_matches_last_7_days": state_a["matches_last_7_days"] - state_b["matches_last_7_days"],
         "delta_matches_last_30_days": state_a["matches_last_30_days"] - state_b["matches_last_30_days"],
         "delta_matches_last_365_days": state_a["matches_last_365_days"] - state_b["matches_last_365_days"],
+        "has_surface_history": int(state_a["has_surface_history"] == 1 and state_b["has_surface_history"] == 1),
         "delta_surface_win_pct_last10": state_a["surface_win_pct_last10"] - state_b["surface_win_pct_last10"],
         "delta_hand_win_pct_last10": state_a["hand_win_pct_last10"] - state_b["hand_win_pct_last10"],
         "delta_serve_win_pct_last10_surface": (state_a["serve_win_pct_last10_surface"] - state_b["serve_win_pct_last10_surface"]),
@@ -627,13 +674,14 @@ def _build_baseline_row(state_a: dict, state_b: dict, tour: str, as_of_date: pd.
         "round_ordinal": round_ordinal,
     }
 
-    return pd.DataFrame([row])
+    return add_markov_match_features(pd.DataFrame([row]))
 
 
 
 def predict_match_probability(project_root: Path, tour: str, requested_player_a: str, requested_player_b: str,
     match_date: str, surface: str | None = None, round_name: str | None = None, best_of: int | None = None,
-    tourney_level: str | None = None, source: str = "sackmann", model: str = "logit", ) -> dict:
+    tourney_level: str | None = None, source: str = "sackmann", model: str = "logit",
+    model_variant: str = "baseline", ) -> dict:
 
     tour = tour.lower().strip()
     if tour not in {"atp", "wta"}:
@@ -649,6 +697,10 @@ def predict_match_probability(project_root: Path, tour: str, requested_player_a:
     model = model.lower().strip()
     if model not in {"logit", "xgb"}:
         raise ValueError("model must be either 'logit' or 'xgb'")
+
+    model_variant = model_variant.lower().strip()
+    if model_variant not in {"baseline", "tuned"}:
+        raise ValueError("model_variant must be either 'baseline' or 'tuned'")
 
     as_of_date = pd.Timestamp(match_date)
     surface = _normalize_surface(surface)
@@ -731,7 +783,7 @@ def predict_match_probability(project_root: Path, tour: str, requested_player_a:
 
 
     elif model == "xgb":
-        xgb_assets = load_xgb_prediction_artifacts(project_root, tour, source, surface)
+        xgb_assets = load_xgb_prediction_artifacts(project_root, tour, source, surface, model_variant)
 
         model_artifact = xgb_assets["model_artifact"]
         chosen_calibration_method = xgb_assets["chosen_calibration_method"]
@@ -760,6 +812,7 @@ def predict_match_probability(project_root: Path, tour: str, requested_player_a:
         "tour": tour,
         "source": source,
         "model": model,
+        "model_variant": model_variant,
         "chosen_calibration_method": chosen_calibration_method,
         "match_date": str(as_of_date.date()),
         "surface": surface,
@@ -781,22 +834,39 @@ def predict_match_probability(project_root: Path, tour: str, requested_player_a:
 
       
 
-def _get_xgb_artifact_paths(project_root: Path, tour: str, source: str, surface: str | None) -> dict[str, Path]:
+def _get_xgb_artifact_paths(
+    project_root: Path,
+    tour: str,
+    source: str,
+    surface: str | None,
+    model_variant: str = "baseline",
+) -> dict[str, Path]:
+    model_variant = model_variant.lower().strip()
+    if model_variant not in {"baseline", "tuned"}:
+        raise ValueError("model_variant must be either 'baseline' or 'tuned'")
+
     suffix = _build_artifact_suffix(source=source, surface=surface)
     models_dir = project_root / "data" / "models"
+    artifact_stem = f"{tour}_xgb_{model_variant}{suffix}"
 
     return {
-        "model": models_dir / f"{tour}_xgb_baseline{suffix}.joblib",
-        "metrics": models_dir / f"{tour}_xgb_baseline{suffix}_metrics.json",
-        "metadata": models_dir / f"{tour}_xgb_baseline{suffix}_meta.json",
-        "isotonic_calibrator": models_dir / f"{tour}_xgb_baseline{suffix}_isotonic_calibrator.joblib",
-        "sigmoid_calibrator": models_dir / f"{tour}_xgb_baseline{suffix}_sigmoid_calibrator.joblib",
+        "model": models_dir / f"{artifact_stem}.joblib",
+        "metrics": models_dir / f"{artifact_stem}_metrics.json",
+        "metadata": models_dir / f"{artifact_stem}_meta.json",
+        "isotonic_calibrator": models_dir / f"{artifact_stem}_isotonic_calibrator.joblib",
+        "sigmoid_calibrator": models_dir / f"{artifact_stem}_sigmoid_calibrator.joblib",
     }
 
 
-def load_xgb_prediction_artifacts(project_root: Path, tour: str, source: str, surface: str | None) -> dict:
+def load_xgb_prediction_artifacts(
+    project_root: Path,
+    tour: str,
+    source: str,
+    surface: str | None,
+    model_variant: str = "baseline",
+) -> dict:
 
-    paths = _get_xgb_artifact_paths(project_root, tour, source, surface)
+    paths = _get_xgb_artifact_paths(project_root, tour, source, surface, model_variant)
     model_artifact = load_model_artifact(paths["model"])
 
     metrics_payload = json.loads(paths["metrics"].read_text(encoding="utf-8"))

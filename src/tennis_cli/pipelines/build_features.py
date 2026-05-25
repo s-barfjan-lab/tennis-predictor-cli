@@ -5,7 +5,7 @@ import pandas as pd
 from rich.console import Console
 
 from ..config import get_paths, get_settings
-from ..features.elo import compute_elo_features, compute_all_elo_features
+from ..features.elo import compute_all_elo_features
 from ..features.long_view import build_long_view, save_long_view
 from ..features.rolling import add_rolling_features
 from ..features.h2h import compute_h2h_features

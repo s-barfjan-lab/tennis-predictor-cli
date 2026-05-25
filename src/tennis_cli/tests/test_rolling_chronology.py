@@ -64,3 +64,55 @@ def test_rolling_features_are_chronologically_ordered_in_a_slam_path():
     assert list(out["current_win_streak"]) == [0, 1, 2, 3, 4, 5, 6]
     assert pd.isna(out["previous_match_win"].iloc[0])
     assert list(out["previous_match_win"].iloc[1:]) == pytest.approx([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    assert list(out["has_surface_history"]) == [0, 0, 0, 0, 0, 1, 1]
+    assert out["serve_win_pct_last10_surface"].iloc[:5].isna().all()
+    assert list(out["serve_win_pct_last10_surface"].iloc[5:]) == pytest.approx([0.5, 0.5])
+
+
+def test_markov_rolling_histories_use_prior_matches_only():
+    rows = []
+    for i in range(11):
+        rows.append(
+            {
+                "match_id": f"m{i}",
+                "tourney_id": "t",
+                "match_num": i,
+                "tour": "atp",
+                "tourney_date": f"2024-01-{i + 1:02d}",
+                "player_id": "A",
+                "opponent_id": f"X{i}",
+                "opponent_hand": "R",
+                "surface": "HARD",
+                "round": "R32",
+                "label_win": 1,
+                "service_points_won_pct": 0.50 + (i * 0.01),
+                "return_points_won_pct": 0.40 + (i * 0.01),
+            }
+        )
+    df = pd.DataFrame(rows)
+    for col in [
+        "aces",
+        "aces_per_service_point",
+        "df_per_service_point",
+        "first_serve_in_pct",
+        "ace_vs_df",
+        "second_serve_won_per_service_game",
+        "bp_conversion_pct",
+        "bp_saved_pct",
+    ]:
+        df[col] = 0.5
+
+    out = add_rolling_features(df).sort_values(["player_id", "tourney_date"]).reset_index(drop=True)
+
+    assert out["service_points_won_pct_30"].iloc[:10].isna().all()
+    assert out["return_points_won_pct_30"].iloc[:10].isna().all()
+    assert list(out["has_serve_history"].iloc[:10]) == [0] * 10
+    assert list(out["has_return_history"].iloc[:10]) == [0] * 10
+    assert out["has_serve_history"].iloc[10] == 1
+    assert out["has_return_history"].iloc[10] == 1
+    assert out["service_points_won_pct_30"].iloc[10] == pytest.approx(
+        df["service_points_won_pct"].iloc[:10].mean()
+    )
+    assert out["return_points_won_pct_30"].iloc[10] == pytest.approx(
+        df["return_points_won_pct"].iloc[:10].mean()
+    )

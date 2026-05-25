@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from tennis_cli.features.elo import compute_elo_features
+from tennis_cli.features.elo import compute_all_elo_features, compute_elo_features
 
 
 def test_compute_elo_features_uses_pre_match_ratings_chronologically():
@@ -20,3 +20,54 @@ def test_compute_elo_features_uses_pre_match_ratings_chronologically():
     assert out["winner_elo_post"].iloc[0] > out["winner_elo_pre"].iloc[0]
     assert out["loser_elo_post"].iloc[0] < out["loser_elo_pre"].iloc[0]
     assert out["tourney_date"].is_monotonic_increasing
+
+
+def test_surface_elo_bootstraps_first_surface_match_from_global_elo():
+    df = pd.DataFrame({
+        "tourney_date": ["2025-01-01", "2025-01-05"],
+        "surface": ["Hard", "Clay"],
+        "winner_id": [1, 1],
+        "loser_id": [2, 3],
+        "winner_name": ["Player A", "Player A"],
+        "loser_name": ["Player B", "Player C"],
+    })
+
+    out = compute_all_elo_features(df)
+
+    assert out["winner_elo_pre"].iloc[1] == pytest.approx(1512.0)
+    assert out["winner_surface_elo_pre"].iloc[1] == pytest.approx((0.70 * 1512.0) + (0.30 * 1500.0))
+    assert out["loser_surface_elo_pre"].iloc[1] == pytest.approx(1500.0)
+
+
+def test_walkovers_and_retirements_do_not_update_elo():
+    df = pd.DataFrame({
+        "tourney_date": ["2025-01-01", "2025-01-05"],
+        "surface": ["Hard", "Hard"],
+        "score": ["6-4 RET", "6-4 6-4"],
+        "winner_id": [1, 1],
+        "loser_id": [2, 2],
+        "winner_name": ["Player A", "Player A"],
+        "loser_name": ["Player B", "Player B"],
+    })
+
+    out = compute_all_elo_features(df)
+
+    assert out["winner_elo_pre"].iloc[0] == pytest.approx(1500.0)
+    assert out["winner_elo_post"].iloc[0] == pytest.approx(1500.0)
+    assert out["loser_elo_pre"].iloc[0] == pytest.approx(1500.0)
+    assert out["loser_elo_post"].iloc[0] == pytest.approx(1500.0)
+
+    assert out["winner_elo_pre"].iloc[1] == pytest.approx(1500.0)
+    assert out["loser_elo_pre"].iloc[1] == pytest.approx(1500.0)
+    assert out["winner_elo_post"].iloc[1] > out["winner_elo_pre"].iloc[1]
+    assert out["loser_elo_post"].iloc[1] < out["loser_elo_pre"].iloc[1]
+
+    assert out["winner_surface_elo_pre"].iloc[0] == pytest.approx(1500.0)
+    assert out["winner_surface_elo_post"].iloc[0] == pytest.approx(1500.0)
+    assert out["loser_surface_elo_pre"].iloc[0] == pytest.approx(1500.0)
+    assert out["loser_surface_elo_post"].iloc[0] == pytest.approx(1500.0)
+
+    assert out["winner_surface_elo_pre"].iloc[1] == pytest.approx(1500.0)
+    assert out["loser_surface_elo_pre"].iloc[1] == pytest.approx(1500.0)
+    assert out["winner_surface_elo_post"].iloc[1] > out["winner_surface_elo_pre"].iloc[1]
+    assert out["loser_surface_elo_post"].iloc[1] < out["loser_surface_elo_pre"].iloc[1]

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from tennis_cli.config import Paths
-from tennis_cli.features.elo import EloConfig, compute_elo_features
+from tennis_cli.features.elo import compute_all_elo_features
 
 
 def build_elo_for_tour(tour: str, paths: Paths) -> pd.DataFrame:
@@ -24,8 +24,7 @@ def build_elo_for_tour(tour: str, paths: Paths) -> pd.DataFrame:
 
     print(f"Loaded {len(df):,} rows for {tour.upper()}")
 
-    elo_df = compute_elo_features(df, config=EloConfig(initial_rating=1500.0,
-            k_factor=32.0,date_col="tourney_date",),)
+    elo_df = compute_all_elo_features(df)
 
     print("Elo columns added:")
     print([
@@ -35,6 +34,12 @@ def build_elo_for_tour(tour: str, paths: Paths) -> pd.DataFrame:
         "loser_elo_post",
         "elo_diff_pre",
         "elo_prob_winner_pre",
+        "winner_surface_elo_pre",
+        "loser_surface_elo_pre",
+        "winner_surface_elo_post",
+        "loser_surface_elo_post",
+        "surface_elo_diff_pre",
+        "surface_elo_prob_winner_pre",
     ])
 
     elo_df.to_parquet(input_path, index=False)

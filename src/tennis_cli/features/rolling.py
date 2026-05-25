@@ -4,13 +4,22 @@ import numpy as np
 import pandas as pd
 
 
-def _rolling_mean_past(series: pd.Series, window: int) -> pd.Series:
+def _rolling_mean_past(series: pd.Series, window: int, min_periods: int = 1) -> pd.Series:
     """
     Mean over the previous `window` matches only.
     The current match is excluded via shift(1).
     """
     series = pd.to_numeric(series, errors="coerce")
-    return series.shift(1).rolling(window=window, min_periods=1).mean()
+    return series.shift(1).rolling(window=window, min_periods=min_periods).mean()
+
+
+def _rolling_count_past(series: pd.Series, window: int) -> pd.Series:
+    """
+    Count non-missing values over the previous `window` matches only.
+    The current match is excluded via shift(1).
+    """
+    series = pd.to_numeric(series, errors="coerce")
+    return series.shift(1).rolling(window=window, min_periods=1).count()
 
 
 def _expanding_mean_past(series: pd.Series) -> pd.Series:
@@ -188,15 +197,39 @@ def add_rolling_features(long_df: pd.DataFrame, window: int = 10) -> pd.DataFram
 
     # New rolling return-side features
     df["return_win_pct_last10"] = grouped["return_points_won_pct"].transform(lambda s: _rolling_mean_past(s, window))
+    df["service_points_won_pct_30"] = grouped["service_points_won_pct"].transform(
+        lambda s: _rolling_mean_past(s, 30, min_periods=10)
+    )
+    df["return_points_won_pct_30"] = grouped["return_points_won_pct"].transform(
+        lambda s: _rolling_mean_past(s, 30, min_periods=10)
+    )
+    df["has_serve_history"] = (
+        grouped["service_points_won_pct"].transform(lambda s: _rolling_count_past(s, 30)) >= 10
+    ).astype(int)
+    df["has_return_history"] = (
+        grouped["return_points_won_pct"].transform(lambda s: _rolling_count_past(s, 30)) >= 10
+    ).astype(int)
     df["bp_conversion_last10"] = grouped["bp_conversion_pct"].transform(lambda s: _rolling_mean_past(s, window))
     df["bp_saved_pct_last10"] = grouped["bp_saved_pct"].transform(lambda s: _rolling_mean_past(s, window))
 
     # Same-surface rolling features (same feature family, but only on the current surface)
-    df["surface_win_pct_last10"] = grouped_surface["label_win"].transform(lambda s: _rolling_mean_past(s, window))
-    df["serve_win_pct_last10_surface"] = grouped_surface["service_points_won_pct"].transform(lambda s: _rolling_mean_past(s, window))
-    df["return_win_pct_last10_surface"] = grouped_surface["return_points_won_pct"].transform(lambda s: _rolling_mean_past(s, window))
-    df["bp_conversion_last10_surface"] = grouped_surface["bp_conversion_pct"].transform(lambda s: _rolling_mean_past(s, window))
-    df["bp_saved_pct_last10_surface"] = grouped_surface["bp_saved_pct"].transform(lambda s: _rolling_mean_past(s, window))
+    df["surface_match_count"] = grouped_surface.cumcount()
+    df["has_surface_history"] = (df["surface_match_count"] >= 5).astype(int)
+    df["surface_win_pct_last10"] = grouped_surface["label_win"].transform(
+        lambda s: _rolling_mean_past(s, window, min_periods=5)
+    )
+    df["serve_win_pct_last10_surface"] = grouped_surface["service_points_won_pct"].transform(
+        lambda s: _rolling_mean_past(s, window, min_periods=5)
+    )
+    df["return_win_pct_last10_surface"] = grouped_surface["return_points_won_pct"].transform(
+        lambda s: _rolling_mean_past(s, window, min_periods=5)
+    )
+    df["bp_conversion_last10_surface"] = grouped_surface["bp_conversion_pct"].transform(
+        lambda s: _rolling_mean_past(s, window, min_periods=5)
+    )
+    df["bp_saved_pct_last10_surface"] = grouped_surface["bp_saved_pct"].transform(
+        lambda s: _rolling_mean_past(s, window, min_periods=5)
+    )
 
     # Win percentage against the same opponent handedness as this row's opponent.
     df["hand_win_pct_last10"] = grouped_opponent_hand["label_win"].transform(lambda s: _rolling_mean_past(s, window))

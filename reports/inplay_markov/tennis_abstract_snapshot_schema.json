@@ -1,0 +1,127 @@
+{
+  "parquet_path": "C:\\Users\\LENOVO\\Projects\\tennis-predictor-cli\\data\\features\\tennis_abstract_pbp\\inplay_markov_snapshots.parquet",
+  "rows": 1189661,
+  "columns": [
+    {
+      "name": "snapshot_id",
+      "dtype": "object"
+    },
+    {
+      "name": "match_id",
+      "dtype": "object"
+    },
+    {
+      "name": "tour",
+      "dtype": "object"
+    },
+    {
+      "name": "match_date",
+      "dtype": "datetime64[ns]"
+    },
+    {
+      "name": "tournament",
+      "dtype": "object"
+    },
+    {
+      "name": "round",
+      "dtype": "object"
+    },
+    {
+      "name": "surface",
+      "dtype": "object"
+    },
+    {
+      "name": "best_of",
+      "dtype": "int64"
+    },
+    {
+      "name": "final_tiebreak_rule",
+      "dtype": "object"
+    },
+    {
+      "name": "player1_name",
+      "dtype": "object"
+    },
+    {
+      "name": "player2_name",
+      "dtype": "object"
+    },
+    {
+      "name": "point_index",
+      "dtype": "int64"
+    },
+    {
+      "name": "source_file",
+      "dtype": "object"
+    },
+    {
+      "name": "sets_1",
+      "dtype": "int64"
+    },
+    {
+      "name": "sets_2",
+      "dtype": "int64"
+    },
+    {
+      "name": "games_1",
+      "dtype": "int64"
+    },
+    {
+      "name": "games_2",
+      "dtype": "int64"
+    },
+    {
+      "name": "points_1",
+      "dtype": "object"
+    },
+    {
+      "name": "points_2",
+      "dtype": "object"
+    },
+    {
+      "name": "is_tiebreak_point",
+      "dtype": "int64"
+    },
+    {
+      "name": "server_player",
+      "dtype": "Int64"
+    },
+    {
+      "name": "server",
+      "dtype": "object"
+    },
+    {
+      "name": "p1_service_points_won_before",
+      "dtype": "int64"
+    },
+    {
+      "name": "p1_service_points_played_before",
+      "dtype": "int64"
+    },
+    {
+      "name": "p2_service_points_won_before",
+      "dtype": "int64"
+    },
+    {
+      "name": "p2_service_points_played_before",
+      "dtype": "int64"
+    },
+    {
+      "name": "point_winner_player",
+      "dtype": "Int64"
+    },
+    {
+      "name": "label_player1_wins_point",
+      "dtype": "int64"
+    },
+    {
+      "name": "match_winner_player",
+      "dtype": "Int64"
+    },
+    {
+      "name": "label_player1_win_match",
+      "dtype": "Int64"
+    }
+  ],
+  "note": "Use the CSV samples for quick inspection if your editor cannot open the full parquet."
+}

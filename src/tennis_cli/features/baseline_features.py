@@ -4,6 +4,8 @@ from pathlib import Path
 import pandas as pd
 from rich.console import Console
 
+from tennis_cli.features.markov import add_markov_match_features
+
 console = Console()
 
 
@@ -171,12 +173,17 @@ def build_baseline_match_table(long_df: pd.DataFrame) -> pd.DataFrame:
         "second_serve_won_per_service_game_last10",
         "serve_win_pct_last10",
         "return_win_pct_last10",
+        "service_points_won_pct_30",
+        "return_points_won_pct_30",
+        "has_serve_history",
+        "has_return_history",
         "bp_conversion_last10",
         "bp_saved_pct_last10",
         "days_since_last_match",
         "matches_last_7_days",
         "matches_last_30_days",
         "matches_last_365_days",
+        "has_surface_history",
         "surface_win_pct_last10",
         "hand_win_pct_last10",
         "serve_win_pct_last10_surface",
@@ -228,12 +235,17 @@ def build_baseline_match_table(long_df: pd.DataFrame) -> pd.DataFrame:
         "second_serve_won_per_service_game_last10_a", "second_serve_won_per_service_game_last10_b",
         "serve_win_pct_last10_a", "serve_win_pct_last10_b",
         "return_win_pct_last10_a", "return_win_pct_last10_b",
+        "service_points_won_pct_30_a", "service_points_won_pct_30_b",
+        "return_points_won_pct_30_a", "return_points_won_pct_30_b",
+        "has_serve_history_a", "has_serve_history_b",
+        "has_return_history_a", "has_return_history_b",
         "bp_conversion_last10_a", "bp_conversion_last10_b",
         "bp_saved_pct_last10_a", "bp_saved_pct_last10_b",
         "days_since_last_match_a", "days_since_last_match_b",
         "matches_last_7_days_a", "matches_last_7_days_b",
         "matches_last_30_days_a", "matches_last_30_days_b",
         "matches_last_365_days_a", "matches_last_365_days_b",
+        "has_surface_history_a", "has_surface_history_b",
         "surface_win_pct_last10_a", "surface_win_pct_last10_b",
         "hand_win_pct_last10_a", "hand_win_pct_last10_b",
         "serve_win_pct_last10_surface_a", "serve_win_pct_last10_surface_b",
@@ -317,6 +329,10 @@ def build_baseline_match_table(long_df: pd.DataFrame) -> pd.DataFrame:
     wide["delta_matches_last_7_days"] = wide["matches_last_7_days_a"] - wide["matches_last_7_days_b"]
     wide["delta_matches_last_30_days"] = wide["matches_last_30_days_a"] - wide["matches_last_30_days_b"]
     wide["delta_matches_last_365_days"] = wide["matches_last_365_days_a"] - wide["matches_last_365_days_b"]
+    wide["has_surface_history"] = (
+        (wide["has_surface_history_a"] == 1)
+        & (wide["has_surface_history_b"] == 1)
+    ).astype(int)
     wide["delta_surface_win_pct_last10"] = wide["surface_win_pct_last10_a"] - wide["surface_win_pct_last10_b"]
     wide["delta_hand_win_pct_last10"] = wide["hand_win_pct_last10_a"] - wide["hand_win_pct_last10_b"]
     wide["delta_serve_win_pct_last10_surface"] = (wide["serve_win_pct_last10_surface_a"] - wide["serve_win_pct_last10_surface_b"])
@@ -344,6 +360,7 @@ def build_baseline_match_table(long_df: pd.DataFrame) -> pd.DataFrame:
     wide["common_opp_count"] = common_df["common_opp_count"]
     wide["delta_common_opp_win_pct"] = common_df["delta_common_opp_win_pct"]
     wide["delta_common_opp_matches"] = common_df["delta_common_opp_matches"]
+    wide = add_markov_match_features(wide)
 
     preferred_order = [
         "match_id",
@@ -382,12 +399,18 @@ def build_baseline_match_table(long_df: pd.DataFrame) -> pd.DataFrame:
         "delta_second_serve_won_per_service_game_last10",
         "delta_serve_win_pct_last10",
         "delta_return_win_pct_last10",
+        "markov_match_win_prob_a",
+        "markov_match_win_prob_b",
+        "delta_markov_match_win",
+        "has_serve_history",
+        "has_return_history",
         "delta_bp_conversion_last10",
         "delta_bp_saved_pct_last10",
         "delta_days_since_last_match",
         "delta_matches_last_7_days",
         "delta_matches_last_30_days",
         "delta_matches_last_365_days",
+        "has_surface_history",
         "delta_surface_win_pct_last10",
         "delta_hand_win_pct_last10",
         "delta_serve_win_pct_last10_surface",

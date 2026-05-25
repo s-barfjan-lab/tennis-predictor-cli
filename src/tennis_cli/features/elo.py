@@ -8,6 +8,7 @@ import pandas as pd
 
 DEFAULT_ELO = 1500.0
 DEFAULT_K = 24.0
+BAD_SCORE_TOKENS = ("RET", "W/O", "WO", "DEF", "ABN", "UNP", "CANC")
 
 
 @dataclass
@@ -154,8 +155,7 @@ def _count_sets_won(score: object) -> tuple[int, int]:
         return 1, 0
 
     upper = score_text.upper()
-    bad_tokens = ["RET", "W/O", "WO", "DEF", "ABN", "UNP", "CANC"]
-    if any(tok in upper for tok in bad_tokens):
+    if any(tok in upper for tok in BAD_SCORE_TOKENS):
         return 1, 0
 
     winner_sets = 0
@@ -176,6 +176,18 @@ def _count_sets_won(score: object) -> tuple[int, int]:
         return 1, 0
 
     return winner_sets, loser_sets
+
+
+def _should_update_elo(score: object) -> bool:
+    if pd.isna(score):
+        return True
+
+    score_text = str(score).strip()
+    if not score_text:
+        return True
+
+    upper = score_text.upper()
+    return not any(tok in upper for tok in BAD_SCORE_TOKENS)
 
 
 def _margin_multiplier(score: object) -> float:
@@ -262,10 +274,15 @@ def _compute_overall_elo_on_prepared(df: pd.DataFrame, config: EloConfig) -> pd.
         p_winner = expected_score(r_winner, r_loser)
         p_loser = 1.0 - p_winner
 
-        k = _effective_k(row, config)
-
-        new_r_winner = r_winner + k * (1.0 - p_winner)
-        new_r_loser = r_loser + k * (0.0 - p_loser)
+        if _should_update_elo(getattr(row, "score", None)):
+            k = _effective_k(row, config)
+            new_r_winner = r_winner + k * (1.0 - p_winner)
+            new_r_loser = r_loser + k * (0.0 - p_loser)
+            ratings[winner_key] = new_r_winner
+            ratings[loser_key] = new_r_loser
+        else:
+            new_r_winner = r_winner
+            new_r_loser = r_loser
 
         winner_elo_pre.append(r_winner)
         loser_elo_pre.append(r_loser)
@@ -273,9 +290,6 @@ def _compute_overall_elo_on_prepared(df: pd.DataFrame, config: EloConfig) -> pd.
         loser_elo_post.append(new_r_loser)
         elo_diff_pre.append(r_winner - r_loser)
         elo_prob_winner_pre.append(p_winner)
-
-        ratings[winner_key] = new_r_winner
-        ratings[loser_key] = new_r_loser
 
     out = df.copy()
     out["winner_elo_pre"] = winner_elo_pre
@@ -303,6 +317,11 @@ def _compute_surface_elo_on_prepared(df: pd.DataFrame, config: EloConfig) -> pd.
     surface_elo_diff_pre = []
     surface_elo_prob_winner_pre = []
 
+    def initial_surface_rating(global_rating: object) -> float:
+        if pd.isna(global_rating):
+            return config.initial_rating
+        return 0.70 * float(global_rating) + 0.30 * config.initial_rating
+
     for row in df.itertuples(index=False):
         surface = row.surface_normalized
         ratings = surface_ratings[surface]
@@ -310,16 +329,27 @@ def _compute_surface_elo_on_prepared(df: pd.DataFrame, config: EloConfig) -> pd.
         winner_key = str(row.winner_id)
         loser_key = str(row.loser_id)
 
-        r_winner = ratings.get(winner_key, config.initial_rating)
-        r_loser = ratings.get(loser_key, config.initial_rating)
+        r_winner = ratings.get(
+            winner_key,
+            initial_surface_rating(getattr(row, "winner_elo_pre", pd.NA)),
+        )
+        r_loser = ratings.get(
+            loser_key,
+            initial_surface_rating(getattr(row, "loser_elo_pre", pd.NA)),
+        )
 
         p_winner = expected_score(r_winner, r_loser)
         p_loser = 1.0 - p_winner
 
-        k = _effective_k(row, config)
-
-        new_r_winner = r_winner + k * (1.0 - p_winner)
-        new_r_loser = r_loser + k * (0.0 - p_loser)
+        if _should_update_elo(getattr(row, "score", None)):
+            k = _effective_k(row, config)
+            new_r_winner = r_winner + k * (1.0 - p_winner)
+            new_r_loser = r_loser + k * (0.0 - p_loser)
+            ratings[winner_key] = new_r_winner
+            ratings[loser_key] = new_r_loser
+        else:
+            new_r_winner = r_winner
+            new_r_loser = r_loser
 
         winner_surface_elo_pre.append(r_winner)
         loser_surface_elo_pre.append(r_loser)
@@ -327,9 +357,6 @@ def _compute_surface_elo_on_prepared(df: pd.DataFrame, config: EloConfig) -> pd.
         loser_surface_elo_post.append(new_r_loser)
         surface_elo_diff_pre.append(r_winner - r_loser)
         surface_elo_prob_winner_pre.append(p_winner)
-
-        ratings[winner_key] = new_r_winner
-        ratings[loser_key] = new_r_loser
 
     out = df.copy()
     out["winner_surface_elo_pre"] = winner_surface_elo_pre
@@ -391,7 +418,7 @@ def compute_all_elo_features(
         raise ValueError("Missing required column for surface Elo: ['surface']")
 
     overall = _compute_overall_elo_on_prepared(prepared, config)
-    surface = _compute_surface_elo_on_prepared(prepared, config)
+    surface = _compute_surface_elo_on_prepared(overall, config)
 
     cols_to_add = [
         "surface_normalized",

@@ -6,6 +6,14 @@ Built with a strong focus on **probability calibration, reproducibility, and int
 
 ---
 
+## Remediation Status
+
+Headline model numbers reported before commit/tag `v0-postleak` are **not reliable** as canonical results. A remediation audit found chronological feature leakage in parts of the earlier pipeline, especially ATP/TML XGBoost branches, and the corrected baseline materially changes the thesis claim.
+
+Use `v0-postleak` and later reports as the canonical baseline. See [reports/remediation/SUMMARY.md](reports/remediation/SUMMARY.md) for the corrected headline numbers and the final Day 10 thesis position.
+
+---
+
 ## What This Project Does
 
 - **Pre-match prediction**: win probabilities using Elo, rankings, serve/return micro-stats, form, and event context  
